@@ -18,25 +18,7 @@ void wifi_init(void)
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    ESP_LOGI(TAG_WIFI, "Connecting to %s...", WIFI_SSID);
-    Serial.printf("WiFi: connecting to %s\n", WIFI_SSID);
-
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - start) < 15000) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        xEventGroupSetBits(wifi_event_group, WIFI_BIT_CONNECTED);
-        xEventGroupClearBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
-        ESP_LOGI(TAG_WIFI, "Connected. IP: %s", WiFi.localIP().toString().c_str());
-        Serial.printf("WiFi OK. IP: %s\n", WiFi.localIP().toString().c_str());
-    } else {
-        ESP_LOGW(TAG_WIFI, "Connection timeout");
-        Serial.printf("WiFi timeout. Will retry.\n");
-    }
+    Serial.printf("WiFi: connecting to %s (async)...\n", WIFI_SSID);
 }
 
 bool wifi_is_connected(void)
