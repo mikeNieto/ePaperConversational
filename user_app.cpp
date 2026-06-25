@@ -35,6 +35,107 @@ EventGroupHandle_t touch_event_group = NULL;
 static QueueHandle_t gpio_evt_queue = NULL;
 TaskHandle_t sleep_timer_handle = NULL;
 
+AppState g_app_state = STATE_ACTIVE;
+lv_obj_t* g_btn_continuar = NULL;
+lv_obj_t* g_btn_nueva = NULL;
+lv_obj_t* g_lbl_continuar = NULL;
+lv_obj_t* g_lbl_nueva = NULL;
+int g_selected_option = 0;
+
+QueueHandle_t state_queue = NULL;
+
+void generate_uuid(char* buf, size_t len)
+{
+    snprintf(buf, len, "%08x-%04x-%04x-%04x-%04x%08x",
+        esp_random(), esp_random() & 0xFFFF,
+        (esp_random() & 0x0FFF) | 0x4000,
+        (esp_random() & 0x3FFF) | 0x8000,
+        esp_random() & 0xFFFF, esp_random());
+}
+
+void highlight_selection(void)
+{
+    if (uuid_is_null) return;
+    if (g_btn_continuar && g_lbl_continuar) {
+        bool sel = (g_selected_option == 0);
+        lv_obj_set_style_bg_color(g_btn_continuar, sel ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(g_lbl_continuar, sel ? lv_color_white() : lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(g_btn_continuar, lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(g_btn_continuar, sel ? 0 : 1, LV_STATE_DEFAULT);
+    }
+    if (g_btn_nueva && g_lbl_nueva) {
+        bool sel = (g_selected_option == 1);
+        lv_obj_set_style_bg_color(g_btn_nueva, sel ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_set_style_text_color(g_lbl_nueva, sel ? lv_color_white() : lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(g_btn_nueva, lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(g_btn_nueva, sel ? 0 : 1, LV_STATE_DEFAULT);
+    }
+}
+
+static void on_screen1_activate(int option)
+{
+    if (uuid_is_null || option == 1) {
+        generate_uuid(conversation_uuid, sizeof(conversation_uuid));
+        uuid_is_null = false;
+        Serial.printf("New UUID: %s\n", conversation_uuid);
+    }
+    switch_state(STATE_RECORD);
+}
+
+void switch_state(AppState new_state)
+{
+    if (!lvgl_lock(2000)) return;
+
+    lv_obj_t* old_scr = lv_scr_act();
+    lv_obj_t* new_scr = NULL;
+
+    if (new_state == STATE_RECORD) {
+        new_scr = create_screen_2_record();
+    } else if (new_state == STATE_ACTIVE) {
+        new_scr = create_screen_1_active(hasTouch, uuid_is_null);
+    }
+
+    if (new_scr) {
+        lv_scr_load(new_scr);
+        lv_timer_handler();
+        if (old_scr && old_scr != lv_layer_top()) {
+            lv_obj_del(old_scr);
+        }
+    }
+
+    g_app_state = new_state;
+    g_btn_continuar = NULL;
+    g_btn_nueva = NULL;
+    g_lbl_continuar = NULL;
+    g_lbl_nueva = NULL;
+
+    lvgl_unlock();
+    activity_feed();
+}
+
+static void state_task(void *arg)
+{
+    AppEvent evt;
+    for (;;) {
+        if (xQueueReceive(state_queue, &evt, pdMS_TO_TICKS(200)) == pdTRUE) {
+            if (g_app_state == STATE_ACTIVE) {
+                if (evt.type == EVT_TOGGLE_SELECTION && !uuid_is_null) {
+                    if (lvgl_lock(200)) {
+                        g_selected_option = !g_selected_option;
+                        highlight_selection();
+                        lvgl_unlock();
+                    }
+                } else if (evt.type == EVT_ACTIVATE_OPTION) {
+                    int opt = uuid_is_null ? 1 : g_selected_option;
+                    on_screen1_activate(opt);
+                } else if (evt.type == EVT_TOUCH_OPTION) {
+                    on_screen1_activate(evt.data);
+                }
+            }
+        }
+    }
+}
+
 static SemaphoreHandle_t lvgl_mux = NULL;
 
 static bool example_lvgl_lock(int timeout_ms)
@@ -153,6 +254,17 @@ void button_task(void *arg)
 
         if (boot_ev || pwr_ev) activity_feed();
 
+        if (g_app_state == STATE_ACTIVE) {
+            if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) {
+                AppEvent evt = { EVT_TOGGLE_SELECTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
+                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+        }
+
         if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) Serial.printf("BOOT single_click\n");
         if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) Serial.printf("BOOT double_click\n");
         if (BTN_GET(boot_ev, BOOT_BIT_LONG))   Serial.printf("BOOT long_press\n");
@@ -213,6 +325,21 @@ void touch_task(void *arg)
                 xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
                 Serial.printf("Touch: (%d,%d)\n", x, y);
                 Serial.flush();
+                activity_feed();
+
+                if (g_app_state == STATE_ACTIVE) {
+                    int opt = -1;
+                    if (uuid_is_null) {
+                        if (x >= 10 && x <= 190 && y >= 80 && y <= 120) opt = 1;
+                    } else {
+                        if (x >= 10 && x <= 190 && y >= 44 && y <= 84) opt = 0;
+                        if (x >= 10 && x <= 190 && y >= 100 && y <= 140) opt = 1;
+                    }
+                    if (opt >= 0) {
+                        AppEvent evt = { EVT_TOUCH_OPTION, (uint8_t)opt };
+                        xQueueSend(state_queue, &evt, 0);
+                    }
+                }
             }
         }
     }
@@ -362,6 +489,9 @@ void user_app_init(void)
 
     lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
+
+    state_queue = xQueueCreate(10, sizeof(AppEvent));
+    xTaskCreatePinnedToCore(state_task, "state_task", 4 * 1024, NULL, 3, NULL, 1);
 
     hasTouch = detectTouch();
     if (hasTouch) {

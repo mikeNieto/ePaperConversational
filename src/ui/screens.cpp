@@ -1,5 +1,9 @@
 #include "screens.h"
 #include "status_bar.h"
+#include "user_app.h"
+
+extern QueueHandle_t state_queue;
+extern void highlight_selection(void);
 
 #define STATUS_BAR_H 24
 #define SCR_W 200
@@ -13,6 +17,20 @@ static void center_label(lv_obj_t* parent, const char* text)
     lv_label_set_text(label, text);
     lv_obj_center(label);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+}
+
+static void on_btn_continuar(lv_event_t* e)
+{
+    AppEvent evt = { 2, 0 };
+    extern QueueHandle_t state_queue;
+    xQueueSend(state_queue, &evt, 0);
+}
+
+static void on_btn_nueva(lv_event_t* e)
+{
+    AppEvent evt = { 2, 1 };
+    extern QueueHandle_t state_queue;
+    xQueueSend(state_queue, &evt, 0);
 }
 
 lv_obj_t* create_screen_0_deep_sleep(int sleep_counter)
@@ -39,13 +57,23 @@ lv_obj_t* create_screen_1_active(bool hasTouch, bool uuidIsNull)
 
     create_status_bar(screen);
 
+    g_btn_continuar = NULL;
+    g_btn_nueva = NULL;
+
     if (uuidIsNull) {
         lv_obj_t* btn = lv_btn_create(screen);
         lv_obj_set_size(btn, 180, 40);
         lv_obj_center(btn);
+        lv_obj_set_style_bg_color(btn, lv_color_black(), LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(btn, 0, LV_STATE_DEFAULT);
         lv_obj_t* lbl = lv_label_create(btn);
         lv_label_set_text(lbl, "Nueva Conversacion");
+        lv_obj_set_style_text_color(lbl, lv_color_white(), LV_STATE_DEFAULT);
         lv_obj_center(lbl);
+        lv_obj_add_event_cb(btn, on_btn_nueva, LV_EVENT_CLICKED, NULL);
+        g_btn_nueva = btn;
+        g_lbl_nueva = lbl;
+        g_selected_option = 1;
     } else {
         lv_obj_t* btn1 = lv_btn_create(screen);
         lv_obj_set_size(btn1, 180, 40);
@@ -53,6 +81,9 @@ lv_obj_t* create_screen_1_active(bool hasTouch, bool uuidIsNull)
         lv_obj_t* lbl1 = lv_label_create(btn1);
         lv_label_set_text(lbl1, "Continuar Conversacion");
         lv_obj_center(lbl1);
+        lv_obj_add_event_cb(btn1, on_btn_continuar, LV_EVENT_CLICKED, NULL);
+        g_btn_continuar = btn1;
+        g_lbl_continuar = lbl1;
 
         lv_obj_t* btn2 = lv_btn_create(screen);
         lv_obj_set_size(btn2, 180, 40);
@@ -60,6 +91,12 @@ lv_obj_t* create_screen_1_active(bool hasTouch, bool uuidIsNull)
         lv_obj_t* lbl2 = lv_label_create(btn2);
         lv_label_set_text(lbl2, "Nueva Conversacion");
         lv_obj_center(lbl2);
+        lv_obj_add_event_cb(btn2, on_btn_nueva, LV_EVENT_CLICKED, NULL);
+        g_btn_nueva = btn2;
+        g_lbl_nueva = lbl2;
+
+        g_selected_option = 0;
+        highlight_selection();
     }
 
     return screen;

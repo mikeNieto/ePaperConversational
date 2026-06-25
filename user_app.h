@@ -16,6 +16,38 @@ extern EventGroupHandle_t touch_event_group;
 
 extern TaskHandle_t sleep_timer_handle;
 
+typedef struct {
+    uint8_t type;
+    uint8_t data;
+} AppEvent;
+
+#define EVT_TOGGLE_SELECTION  1
+#define EVT_ACTIVATE_OPTION   2
+#define EVT_TOUCH_OPTION      3
+
+typedef enum {
+    STATE_DEEP_SLEEP = 0,
+    STATE_ACTIVE = 1,
+    STATE_RECORD = 2,
+    STATE_LISTENING = 3,
+    STATE_SENDING = 4,
+    STATE_CONFIRM = 5,
+    STATE_WAITING = 6,
+    STATE_RESPONSE = 7,
+    STATE_DISCARDED = 8
+} AppState;
+
+extern AppState g_app_state;
+extern lv_obj_t* g_btn_continuar;
+extern lv_obj_t* g_btn_nueva;
+extern lv_obj_t* g_lbl_continuar;
+extern lv_obj_t* g_lbl_nueva;
+extern int g_selected_option;
+
+void generate_uuid(char* buf, size_t len);
+void switch_state(AppState new_state);
+void highlight_selection(void);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
