@@ -52,4 +52,8 @@
 #define WIFI_SSID "MY_WIFI_SSID"
 #define WIFI_PASSWORD "MY_WIFI_PASSWORD"
 
+/* Deep Sleep */
+#define INACTIVITY_TIMEOUT_MS 10000
+#define SLEEP_DURATION_SEC 60
+
 #endif

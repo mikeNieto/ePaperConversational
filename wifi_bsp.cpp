@@ -66,8 +66,7 @@ void wifi_task(void *arg)
         }
 
         if (lvgl_lock(100)) {
-            bool ok = wifi_is_connected();
-            update_status_bar(NULL, ok, 100);
+            status_bar_update_wifi(wifi_is_connected());
             lvgl_unlock();
         }
 

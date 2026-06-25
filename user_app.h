@@ -6,12 +6,15 @@
 #include "freertos/event_groups.h"
 #include "src/display/epaper_driver_bsp.h"
 #include "src/power/board_power_bsp.h"
+#include "src/ui/screens.h"
 
 extern epaper_driver_display *driver;
 extern board_power_bsp_t board_div;
 extern bool hasTouch;
 extern EventGroupHandle_t touch_event_group;
 #define TOUCH_BIT_TAP  (0x01 << 0)
+
+extern TaskHandle_t sleep_timer_handle;
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +29,12 @@ void user_button_init(void);
 void button_task(void *arg);
 bool detectTouch(void);
 void touch_task(void *arg);
+void battery_task(void *arg);
+void display_light_init(void);
+void enter_deep_sleep(void);
+void enter_deep_sleep_light(void);
+void activity_feed(void);
+void deep_sleep_timer_task(void *arg);
 
 #ifdef __cplusplus
 }

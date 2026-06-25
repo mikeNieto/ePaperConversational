@@ -5,6 +5,8 @@
 #include "freertos/task.h"
 #include "user_app.h"
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
+#include "esp_sleep.h"
 #include "user_config.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -12,10 +14,17 @@
 #include "esp_timer.h"
 #include "lvgl.h"
 #include "src/ui/screens.h"
+#include "src/ui/status_bar.h"
 #include "src/button_bsp/button_bsp.h"
 #include "src/i2c_bsp/i2c_bsp.h"
 #include "src/touch_bsp/ft6336_bsp.h"
 #include "wifi_bsp.h"
+#include "src/battery/battery_bsp.h"
+
+RTC_DATA_ATTR int boot_count = 0;
+RTC_DATA_ATTR int sleep_counter = 0;
+RTC_DATA_ATTR char conversation_uuid[37] = {0};
+RTC_DATA_ATTR bool uuid_is_null = true;
 
 static const char *TAG = "user_app";
 
@@ -24,6 +33,7 @@ board_power_bsp_t board_div(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
 bool hasTouch = false;
 EventGroupHandle_t touch_event_group = NULL;
 static QueueHandle_t gpio_evt_queue = NULL;
+TaskHandle_t sleep_timer_handle = NULL;
 
 static SemaphoreHandle_t lvgl_mux = NULL;
 
@@ -120,49 +130,19 @@ void lvgl_port_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000));
 
+    if (!lvgl_mux) {
+        lvgl_mux = xSemaphoreCreateMutex();
+    }
     assert(lvgl_mux);
     xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 8 * 1024, NULL, 4, NULL, 1);
-
-    if (example_lvgl_lock(-1)) {
-        user_ui_init();
-        example_lvgl_unlock();
-    }
 }
 
 void user_ui_init(void)
 {
-    Serial.printf("LVGL: Creating screens demo...\n");
-    Serial.flush();
-
-    lv_obj_t* screens[8];
-
-    screens[0] = create_screen_1_active(true, true);
-    screens[1] = create_screen_2_record();
-    screens[2] = create_screen_2b_listening();
-    screens[3] = create_screen_3_sending();
-    screens[4] = create_screen_3b_discarded();
-    screens[5] = create_screen_4_confirm("Hola, este es un mensaje transcrito de prueba.", true);
-    screens[6] = create_screen_5_waiting();
-    screens[7] = create_screen_6_response("Esta es la respuesta del agente IA. Puede tener varias lineas de texto.");
-
-    lv_obj_t* prev = NULL;
-    for (int i = 0; i < 8; i++) {
-        ESP_LOGI(TAG, "Loading screen %d", i);
-        lv_scr_load(screens[i]);
-        lv_timer_handler();
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        if (prev) lv_obj_del(prev);
-        prev = screens[i];
-    }
-
-    lv_obj_t* screen0 = create_screen_0_deep_sleep(3);
-    lv_scr_load(screen0);
+    lv_obj_t* screen1 = create_screen_1_active(hasTouch, uuid_is_null);
+    lv_scr_load(screen1);
     lv_timer_handler();
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    if (prev) lv_obj_del(prev);
-
-    ESP_LOGI(TAG, "Screen demo complete. Heap free: %d", esp_get_free_heap_size());
-    Serial.printf("ALL SCREENS TESTED. Init OK.\n");
+    Serial.printf("Screen 1 loaded. Sleep timer active (%ds).\n", INACTIVITY_TIMEOUT_MS / 1000);
 }
 
 void button_task(void *arg)
@@ -170,6 +150,8 @@ void button_task(void *arg)
     for (;;) {
         EventBits_t boot_ev = xEventGroupWaitBits(boot_groups, BTN_ALL_BITS, pdTRUE, pdFALSE, pdMS_TO_TICKS(200));
         EventBits_t pwr_ev  = xEventGroupWaitBits(pwr_groups,  BTN_ALL_BITS, pdTRUE, pdFALSE, pdMS_TO_TICKS(200));
+
+        if (boot_ev || pwr_ev) activity_feed();
 
         if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) Serial.printf("BOOT single_click\n");
         if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) Serial.printf("BOOT double_click\n");
@@ -225,6 +207,7 @@ void touch_task(void *arg)
     uint32_t io_num;
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            activity_feed();
             uint16_t x, y;
             if (ft6336->GetTouchPoint(&x, &y)) {
                 xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
@@ -233,6 +216,105 @@ void touch_task(void *arg)
             }
         }
     }
+}
+
+void battery_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    for (;;) {
+        int pct = battery_get_percentage();
+        float v = battery_get_voltage();
+        Serial.printf("Battery: %.2fV %d%%\n", v, pct);
+        if (lvgl_lock(100)) {
+            update_status_bar(NULL, wifi_is_connected(), pct);
+            lvgl_unlock();
+        }
+        vTaskDelay(pdMS_TO_TICKS(30000));
+    }
+}
+
+void enter_deep_sleep(void)
+{
+    Serial.printf("Entering deep sleep...\n");
+    Serial.flush();
+
+    if (driver) {
+        driver->EPD_Init();
+        driver->EPD_Display();
+    }
+
+    esp_sleep_enable_ext1_wakeup_io(
+        (1ULL << BOOT_BUTTON_PIN) | (1ULL << PWR_BUTTON_PIN),
+        ESP_EXT1_WAKEUP_ANY_LOW
+    );
+    rtc_gpio_hold_en(GPIO_NUM_17);
+
+    esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_DURATION_SEC * 1000000ULL);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_deep_sleep_start();
+}
+
+void enter_deep_sleep_light(void)
+{
+    Serial.printf("Entering deep sleep (light)...\n");
+    Serial.flush();
+
+    esp_sleep_enable_ext1_wakeup_io(
+        (1ULL << BOOT_BUTTON_PIN) | (1ULL << PWR_BUTTON_PIN),
+        ESP_EXT1_WAKEUP_ANY_LOW
+    );
+    rtc_gpio_hold_en(GPIO_NUM_17);
+
+    esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_DURATION_SEC * 1000000ULL);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_deep_sleep_start();
+}
+
+void activity_feed(void)
+{
+    if (sleep_timer_handle) {
+        xTaskNotifyGive(sleep_timer_handle);
+    }
+}
+
+void deep_sleep_timer_task(void *arg)
+{
+    for (;;) {
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(INACTIVITY_TIMEOUT_MS)) == 0) {
+            Serial.printf("Inactivity timeout, sleeping...\n");
+            if (lvgl_lock(1000)) {
+                status_bar_set_visible(false);
+                lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
+                lv_scr_load(s0);
+                lv_timer_handler();
+                lvgl_unlock();
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            enter_deep_sleep();
+        }
+    }
+}
+
+void display_light_init(void)
+{
+    board_div.POWEER_EPD_ON();
+    delay(50);
+
+    custom_lcd_spi_t driver_config = {};
+    driver_config.cs = EPD_CS_PIN;
+    driver_config.dc = EPD_DC_PIN;
+    driver_config.rst = EPD_RST_PIN;
+    driver_config.busy = EPD_BUSY_PIN;
+    driver_config.mosi = EPD_MOSI_PIN;
+    driver_config.scl = EPD_SCK_PIN;
+    driver_config.spi_host = EPD_SPI_NUM;
+    driver_config.buffer_len = 5000;
+
+    driver = new epaper_driver_display(EPD_WIDTH, EPD_HEIGHT, driver_config);
+    driver->EPD_Init();
+    driver->EPD_Clear();
+    driver->EPD_DisplayPartBaseImage();
+    driver->EPD_Init_Partial();
 }
 
 void user_app_init(void)
@@ -293,4 +375,13 @@ void user_app_init(void)
 
     wifi_init();
     xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4 * 1024, NULL, 2, NULL, 1);
+
+    battery_init();
+    xTaskCreatePinnedToCore(battery_task, "bat_task", 4 * 1024, NULL, 1, NULL, 1);
+
+    xTaskCreatePinnedToCore(deep_sleep_timer_task, "sleep_timer", 4 * 1024, NULL, 1, &sleep_timer_handle, 1);
+    activity_feed();
+
+    Serial.printf("Boot count: %d  Sleep counter: %d\n", boot_count, sleep_counter);
+    Serial.flush();
 }
