@@ -15,6 +15,7 @@
 #include "src/button_bsp/button_bsp.h"
 #include "src/i2c_bsp/i2c_bsp.h"
 #include "src/touch_bsp/ft6336_bsp.h"
+#include "wifi_bsp.h"
 
 static const char *TAG = "user_app";
 
@@ -101,7 +102,7 @@ void lvgl_port_init(void)
     assert(buffer_1 && buffer_2);
 
     static lv_disp_draw_buf_t disp_buf;
-    lv_disp_draw_buf_init(&disp_buf, buffer_1, buffer_2, EPD_WIDTH * EPD_HEIGHT);
+    lv_disp_draw_buf_init(&disp_buf, buffer_1, buffer_2, LVGL_BUF_PIXELS);
 
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -119,7 +120,6 @@ void lvgl_port_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000));
 
-    lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
     xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 8 * 1024, NULL, 4, NULL, 1);
 
@@ -278,6 +278,9 @@ void user_app_init(void)
     user_button_init();
     xTaskCreatePinnedToCore(button_task, "btn_task", 4 * 1024, NULL, 3, NULL, 1);
 
+    lvgl_mux = xSemaphoreCreateMutex();
+    assert(lvgl_mux);
+
     hasTouch = detectTouch();
     if (hasTouch) {
         Serial.printf("FT6336 detected. Touch enabled.\n");
@@ -287,4 +290,7 @@ void user_app_init(void)
         Serial.printf("FT6336 not detected, touch disabled.\n");
     }
     Serial.flush();
+
+    wifi_init();
+    xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4 * 1024, NULL, 2, NULL, 1);
 }
