@@ -41,5 +41,10 @@
 /* I2C devices */
 #define I2C_RTC_DEV_Address        0x51
 #define I2C_SHTC3_DEV_Address      0x70
+#define I2C_FT6336_DEV_Address     0x38
+
+/* Touch (FT6336) */
+#define EPD_TP_RST_PIN  GPIO_NUM_7
+#define EPD_TP_INT_PIN  GPIO_NUM_21
 
 #endif

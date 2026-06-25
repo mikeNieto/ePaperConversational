@@ -13,11 +13,16 @@
 #include "lvgl.h"
 #include "src/ui/screens.h"
 #include "src/button_bsp/button_bsp.h"
+#include "src/i2c_bsp/i2c_bsp.h"
+#include "src/touch_bsp/ft6336_bsp.h"
 
 static const char *TAG = "user_app";
 
 epaper_driver_display *driver = NULL;
 board_power_bsp_t board_div(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
+bool hasTouch = false;
+EventGroupHandle_t touch_event_group = NULL;
+static QueueHandle_t gpio_evt_queue = NULL;
 
 static SemaphoreHandle_t lvgl_mux = NULL;
 
@@ -180,6 +185,56 @@ void button_task(void *arg)
     }
 }
 
+static void IRAM_ATTR gpio_isr_handler(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+static void gpio_touchint_init(void)
+{
+    gpio_evt_queue = xQueueCreate(3, sizeof(uint32_t));
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    io_conf.pin_bit_mask = (1ULL << EPD_TP_INT_PIN);
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    gpio_config(&io_conf);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(EPD_TP_INT_PIN, gpio_isr_handler, (void *)EPD_TP_INT_PIN);
+}
+
+bool detectTouch(void)
+{
+    I2cMasterBus *i2c_bus = I2cMasterBus::requestInstance(ESP32_I2C_SCL_PIN, ESP32_I2C_SDA_PIN, ESP32_I2C_DEV_NUM);
+
+    if (i2c_bus->i2c_probe_addr(I2C_FT6336_DEV_Address) == ESP_OK) {
+        I2cFt6336Dev *ft6336 = I2cFt6336Dev::requestInstance(
+            i2c_bus->Get_I2cBusHandle(), I2C_FT6336_DEV_Address, EPD_WIDTH, EPD_HEIGHT);
+        ft6336->Ft6336_Reset(EPD_TP_RST_PIN);
+        gpio_touchint_init();
+        return true;
+    }
+    return false;
+}
+
+void touch_task(void *arg)
+{
+    I2cFt6336Dev *ft6336 = I2cFt6336Dev::instance_;
+    uint32_t io_num;
+    for (;;) {
+        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            uint16_t x, y;
+            if (ft6336->GetTouchPoint(&x, &y)) {
+                xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
+                Serial.printf("Touch: (%d,%d)\n", x, y);
+                Serial.flush();
+            }
+        }
+    }
+}
+
 void user_app_init(void)
 {
     Serial.begin(115200);
@@ -222,4 +277,14 @@ void user_app_init(void)
 
     user_button_init();
     xTaskCreatePinnedToCore(button_task, "btn_task", 4 * 1024, NULL, 3, NULL, 1);
+
+    hasTouch = detectTouch();
+    if (hasTouch) {
+        Serial.printf("FT6336 detected. Touch enabled.\n");
+        touch_event_group = xEventGroupCreate();
+        xTaskCreatePinnedToCore(touch_task, "touch_task", 4 * 1024, NULL, 3, NULL, 1);
+    } else {
+        Serial.printf("FT6336 not detected, touch disabled.\n");
+    }
+    Serial.flush();
 }
