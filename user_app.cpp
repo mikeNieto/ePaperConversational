@@ -106,6 +106,10 @@ void switch_state(AppState new_state)
         new_scr = create_screen_2b_listening();
     } else if (new_state == STATE_ACTIVE) {
         new_scr = create_screen_1_active(hasTouch, uuid_is_null);
+    } else if (new_state == STATE_DISCARDED) {
+        new_scr = create_screen_3b_discarded();
+    } else if (new_state == STATE_SENDING) {
+        new_scr = create_screen_3_sending();
     }
 
     if (new_scr) {
@@ -118,6 +122,15 @@ void switch_state(AppState new_state)
 
     g_app_state = new_state;
     lvgl_unlock();
+
+    if (new_state == STATE_DISCARDED) {
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        switch_state(STATE_RECORD);
+    } else if (new_state == STATE_SENDING) {
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        switch_state(STATE_RECORD);
+    }
+
     activity_feed();
     Serial.printf("switch_state: done\n");
     Serial.flush();
@@ -148,10 +161,11 @@ static void state_task(void *arg)
             } else if (g_app_state == STATE_LISTENING) {
                 if (evt.type == EVT_ACTIVATE_OPTION) {
                     audio_stop_recording();
-                    switch_state(STATE_ACTIVE);
+                    switch_state(STATE_SENDING);
                 } else if (evt.type == EVT_RECORDING_DONE) {
                     Serial.printf("Recording auto-stopped (timeout)\n");
-                    switch_state(STATE_ACTIVE);
+                    audio_discard_recording();
+                    switch_state(STATE_DISCARDED);
                 }
             }
         }
@@ -300,7 +314,7 @@ void button_task(void *arg)
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
                 audio_discard_recording();
-                switch_state(STATE_ACTIVE);
+                switch_state(STATE_DISCARDED);
             }
         }
 
@@ -467,6 +481,12 @@ void deep_sleep_timer_task(void *arg)
 {
     for (;;) {
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(INACTIVITY_TIMEOUT_MS)) == 0) {
+            if (g_app_state == STATE_LISTENING ||
+                g_app_state == STATE_SENDING ||
+                g_app_state == STATE_WAITING ||
+                g_app_state == STATE_RESPONSE) {
+                continue;
+            }
             Serial.printf("Inactivity timeout, sleeping...\n");
             if (lvgl_lock(1000)) {
                 status_bar_set_visible(false);
