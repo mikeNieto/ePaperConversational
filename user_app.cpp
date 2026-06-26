@@ -20,6 +20,8 @@
 #include "src/touch_bsp/ft6336_bsp.h"
 #include "wifi_bsp.h"
 #include "src/battery/battery_bsp.h"
+#include "audio_bsp.h"
+#include "src/codec_board/codec_init.h"
 
 RTC_DATA_ATTR int boot_count = 0;
 RTC_DATA_ATTR int sleep_counter = 0;
@@ -84,13 +86,24 @@ static void on_screen1_activate(int option)
 
 void switch_state(AppState new_state)
 {
+    Serial.printf("switch_state: %d -> %d\n", g_app_state, new_state);
+    Serial.flush();
     if (!lvgl_lock(2000)) return;
+
+    g_btn_continuar = NULL;
+    g_btn_nueva = NULL;
+    g_lbl_continuar = NULL;
+    g_lbl_nueva = NULL;
 
     lv_obj_t* old_scr = lv_scr_act();
     lv_obj_t* new_scr = NULL;
 
     if (new_state == STATE_RECORD) {
         new_scr = create_screen_2_record();
+    } else if (new_state == STATE_LISTENING) {
+        audio_play_init();
+        audio_start_recording();
+        new_scr = create_screen_2b_listening();
     } else if (new_state == STATE_ACTIVE) {
         new_scr = create_screen_1_active(hasTouch, uuid_is_null);
     }
@@ -104,13 +117,10 @@ void switch_state(AppState new_state)
     }
 
     g_app_state = new_state;
-    g_btn_continuar = NULL;
-    g_btn_nueva = NULL;
-    g_lbl_continuar = NULL;
-    g_lbl_nueva = NULL;
-
     lvgl_unlock();
     activity_feed();
+    Serial.printf("switch_state: done\n");
+    Serial.flush();
 }
 
 static void state_task(void *arg)
@@ -130,6 +140,18 @@ static void state_task(void *arg)
                     on_screen1_activate(opt);
                 } else if (evt.type == EVT_TOUCH_OPTION) {
                     on_screen1_activate(evt.data);
+                }
+            } else if (g_app_state == STATE_RECORD) {
+                if (evt.type == EVT_ACTIVATE_OPTION) {
+                    switch_state(STATE_LISTENING);
+                }
+            } else if (g_app_state == STATE_LISTENING) {
+                if (evt.type == EVT_ACTIVATE_OPTION) {
+                    audio_stop_recording();
+                    switch_state(STATE_ACTIVE);
+                } else if (evt.type == EVT_RECORDING_DONE) {
+                    Serial.printf("Recording auto-stopped (timeout)\n");
+                    switch_state(STATE_ACTIVE);
                 }
             }
         }
@@ -263,6 +285,23 @@ void button_task(void *arg)
                 AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
                 xQueueSend(state_queue, &evt, 0);
             }
+        } else if (g_app_state == STATE_RECORD) {
+            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
+                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
+                switch_state(STATE_ACTIVE);
+            }
+        } else if (g_app_state == STATE_LISTENING) {
+            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
+                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
+                audio_discard_recording();
+                switch_state(STATE_ACTIVE);
+            }
         }
 
         if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) Serial.printf("BOOT single_click\n");
@@ -301,6 +340,20 @@ static void gpio_touchint_init(void)
 
 bool detectTouch(void)
 {
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.pin_bit_mask = (1ULL << EPD_TP_RST_PIN);
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+    gpio_set_level((gpio_num_t)EPD_TP_RST_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level((gpio_num_t)EPD_TP_RST_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level((gpio_num_t)EPD_TP_RST_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     I2cMasterBus *i2c_bus = I2cMasterBus::requestInstance(ESP32_I2C_SCL_PIN, ESP32_I2C_SDA_PIN, ESP32_I2C_DEV_NUM);
 
     if (i2c_bus->i2c_probe_addr(I2C_FT6336_DEV_Address) == ESP_OK) {
@@ -332,13 +385,19 @@ void touch_task(void *arg)
                     if (uuid_is_null) {
                         if (x >= 10 && x <= 190 && y >= 80 && y <= 120) opt = 1;
                     } else {
-                        if (x >= 10 && x <= 190 && y >= 44 && y <= 84) opt = 0;
-                        if (x >= 10 && x <= 190 && y >= 100 && y <= 140) opt = 1;
+                        if (x >= 10 && x <= 190 && y >= 52 && y <= 92) opt = 0;
+                        if (x >= 10 && x <= 190 && y >= 108 && y <= 148) opt = 1;
                     }
                     if (opt >= 0) {
                         AppEvent evt = { EVT_TOUCH_OPTION, (uint8_t)opt };
                         xQueueSend(state_queue, &evt, 0);
                     }
+                } else if (g_app_state == STATE_RECORD) {
+                    AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                    xQueueSend(state_queue, &evt, 0);
+                } else if (g_app_state == STATE_LISTENING) {
+                    AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                    xQueueSend(state_queue, &evt, 0);
                 }
             }
         }
@@ -484,13 +543,13 @@ void user_app_init(void)
     ESP_LOGI(TAG, "Display init complete. Heap free: %d", esp_get_free_heap_size());
     Serial.printf("ePaperConversational v%s ready.\n", FIRMWARE_VERSION);
 
+    state_queue = xQueueCreate(10, sizeof(AppEvent));
     user_button_init();
     xTaskCreatePinnedToCore(button_task, "btn_task", 4 * 1024, NULL, 3, NULL, 1);
 
     lvgl_mux = xSemaphoreCreateMutex();
     assert(lvgl_mux);
 
-    state_queue = xQueueCreate(10, sizeof(AppEvent));
     xTaskCreatePinnedToCore(state_task, "state_task", 4 * 1024, NULL, 3, NULL, 1);
 
     hasTouch = detectTouch();
@@ -503,6 +562,9 @@ void user_app_init(void)
     }
     Serial.flush();
 
+    set_i2c_bus_handle(ESP32_I2C_DEV_NUM,
+        I2cMasterBus::instance_->Get_I2cBusHandle());
+
     wifi_init();
     xTaskCreatePinnedToCore(wifi_task, "wifi_task", 4 * 1024, NULL, 2, NULL, 1);
 
@@ -511,6 +573,8 @@ void user_app_init(void)
 
     xTaskCreatePinnedToCore(deep_sleep_timer_task, "sleep_timer", 4 * 1024, NULL, 1, &sleep_timer_handle, 1);
     activity_feed();
+
+    audio_bsp_init();
 
     Serial.printf("Boot count: %d  Sleep counter: %d\n", boot_count, sleep_counter);
     Serial.flush();

@@ -26,10 +26,17 @@ I2cMasterBus::I2cMasterBus(int scl_pin, int sda_pin, int i2c_port) {
     i2c_bus_config.sda_io_num                   = (gpio_num_t)sda_pin;
     i2c_bus_config.glitch_ignore_cnt            = 7;
     i2c_bus_config.flags.enable_internal_pullup = true;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_config, &user_i2c_handle));
+    esp_err_t ret = i2c_new_master_bus(&i2c_bus_config, &user_i2c_handle);
+    if (ret != ESP_OK) {
+        user_i2c_handle = NULL;
+    }
 }
 
 I2cMasterBus::~I2cMasterBus() {
+}
+
+void I2cMasterBus::setBusHandle(i2c_master_bus_handle_t handle) {
+    user_i2c_handle = handle;
 }
 
 int I2cMasterBus::i2c_probe_addr(uint8_t addr) {

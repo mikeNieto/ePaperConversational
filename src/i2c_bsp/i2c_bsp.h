@@ -18,6 +18,7 @@ public:
     i2c_master_bus_handle_t Get_I2cBusHandle();
     static I2cMasterBus *instance_;
     static I2cMasterBus *requestInstance(int scl_pin, int sda_pin, int i2c_port);
+    void setBusHandle(i2c_master_bus_handle_t handle);
 };
 
 #endif
