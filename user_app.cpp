@@ -22,6 +22,7 @@
 #include "src/battery/battery_bsp.h"
 #include "audio_bsp.h"
 #include "src/codec_board/codec_init.h"
+#include "api_client.h"
 
 RTC_DATA_ATTR int boot_count = 0;
 RTC_DATA_ATTR int sleep_counter = 0;
@@ -43,6 +44,9 @@ lv_obj_t* g_btn_nueva = NULL;
 lv_obj_t* g_lbl_continuar = NULL;
 lv_obj_t* g_lbl_nueva = NULL;
 int g_selected_option = 0;
+char g_transcribed_text[512] = {0};
+char g_agent_text[1024] = {0};
+char g_audio_url[256] = {0};
 
 QueueHandle_t state_queue = NULL;
 
@@ -72,6 +76,26 @@ void highlight_selection(void)
         lv_obj_set_style_border_color(g_btn_nueva, lv_color_black(), LV_STATE_DEFAULT);
         lv_obj_set_style_border_width(g_btn_nueva, sel ? 0 : 1, LV_STATE_DEFAULT);
     }
+}
+
+static void transcription_task(void *arg)
+{
+    uint8_t* wav = audio_get_wav_buffer();
+    uint32_t size = audio_get_wav_size();
+    char text[512] = {0};
+    AppEvent evt;
+
+    if (wav && size > 44 && api_transcribe_audio(wav, size, text, sizeof(text))) {
+        strncpy(g_transcribed_text, text, sizeof(g_transcribed_text) - 1);
+        Serial.printf("Transcribed: %s\n", g_transcribed_text);
+        evt.type = EVT_TRANSCRIBE_OK;
+    } else {
+        Serial.printf("Transcription failed\n");
+        evt.type = EVT_TRANSCRIBE_FAIL;
+    }
+    evt.data = 0;
+    xQueueSend(state_queue, &evt, 0);
+    vTaskDelete(NULL);
 }
 
 static void on_screen1_activate(int option)
@@ -110,6 +134,8 @@ void switch_state(AppState new_state)
         new_scr = create_screen_3b_discarded();
     } else if (new_state == STATE_SENDING) {
         new_scr = create_screen_3_sending();
+    } else if (new_state == STATE_CONFIRM) {
+        new_scr = create_screen_4_confirm(g_transcribed_text, hasTouch);
     }
 
     if (new_scr) {
@@ -127,8 +153,10 @@ void switch_state(AppState new_state)
         vTaskDelay(pdMS_TO_TICKS(1500));
         switch_state(STATE_RECORD);
     } else if (new_state == STATE_SENDING) {
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        switch_state(STATE_RECORD);
+        xTaskCreatePinnedToCore(transcription_task, "stt_task", 8 * 1024, NULL, 3, NULL, 1);
+    } else if (new_state == STATE_CONFIRM) {
+        g_btn_continuar = NULL;
+        g_btn_nueva = NULL;
     }
 
     activity_feed();
@@ -166,6 +194,26 @@ static void state_task(void *arg)
                     Serial.printf("Recording auto-stopped (timeout)\n");
                     audio_discard_recording();
                     switch_state(STATE_DISCARDED);
+                }
+            } else if (g_app_state == STATE_SENDING) {
+                if (evt.type == EVT_TRANSCRIBE_OK) {
+                    switch_state(STATE_CONFIRM);
+                } else if (evt.type == EVT_TRANSCRIBE_FAIL) {
+                    switch_state(STATE_RECORD);
+                }
+            } else if (g_app_state == STATE_CONFIRM) {
+                if (evt.type == EVT_TOGGLE_SELECTION) {
+                    if (lvgl_lock(200)) {
+                        g_selected_option = !g_selected_option;
+                        highlight_selection();
+                        lvgl_unlock();
+                    }
+                } else if (evt.type == EVT_ACTIVATE_OPTION || evt.type == EVT_TOUCH_OPTION) {
+                    if (evt.data == 0) {
+                        switch_state(STATE_RECORD);
+                    } else {
+                        switch_state(STATE_RECORD);
+                    }
                 }
             }
         }
@@ -315,6 +363,18 @@ void button_task(void *arg)
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
                 audio_discard_recording();
                 switch_state(STATE_DISCARDED);
+            }
+        } else if (g_app_state == STATE_CONFIRM) {
+            if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) {
+                AppEvent evt = { EVT_TOGGLE_SELECTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
+                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
+                switch_state(STATE_RECORD);
             }
         }
 

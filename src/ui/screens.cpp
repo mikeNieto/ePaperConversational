@@ -168,7 +168,7 @@ lv_obj_t* create_screen_4_confirm(const char* transcribedText, bool hasTouch)
     lv_obj_set_width(text_label, 180);
     lv_obj_set_style_text_align(text_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(text_label, transcribedText);
-    lv_obj_set_pos(text_label, 10, STATUS_BAR_H + 10);
+    lv_obj_set_pos(text_label, 10, STATUS_BAR_H + 4);
     lv_obj_set_style_text_font(text_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     lv_obj_t* btn_send = lv_btn_create(screen);
@@ -177,6 +177,9 @@ lv_obj_t* create_screen_4_confirm(const char* transcribedText, bool hasTouch)
     lv_obj_t* lbl_send = lv_label_create(btn_send);
     lv_label_set_text(lbl_send, "Enviar");
     lv_obj_center(lbl_send);
+    lv_obj_add_event_cb(btn_send, on_btn_continuar, LV_EVENT_CLICKED, NULL);
+    g_btn_continuar = btn_send;
+    g_lbl_continuar = lbl_send;
 
     lv_obj_t* btn_cancel = lv_btn_create(screen);
     lv_obj_set_size(btn_cancel, 160, 36);
@@ -184,6 +187,12 @@ lv_obj_t* create_screen_4_confirm(const char* transcribedText, bool hasTouch)
     lv_obj_t* lbl_cancel = lv_label_create(btn_cancel);
     lv_label_set_text(lbl_cancel, "Cancelar");
     lv_obj_center(lbl_cancel);
+    lv_obj_add_event_cb(btn_cancel, on_btn_nueva, LV_EVENT_CLICKED, NULL);
+    g_btn_nueva = btn_cancel;
+    g_lbl_nueva = lbl_cancel;
+
+    g_selected_option = 0;
+    highlight_selection();
 
     return screen;
 }

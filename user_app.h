@@ -25,6 +25,8 @@ typedef struct {
 #define EVT_ACTIVATE_OPTION   2
 #define EVT_TOUCH_OPTION      3
 #define EVT_RECORDING_DONE    4
+#define EVT_TRANSCRIBE_OK     5
+#define EVT_TRANSCRIBE_FAIL   6
 
 typedef enum {
     STATE_DEEP_SLEEP = 0,

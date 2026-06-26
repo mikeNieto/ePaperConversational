@@ -52,8 +52,12 @@
 #define WIFI_SSID "MY_WIFI_SSID"
 #define WIFI_PASSWORD "MY_WIFI_PASSWORD"
 
+/* API */
+#define API_BASE_URL "http://1.1.1.1:1234"
+#define USER_ID "esp32-user-01"
+
 /* Deep Sleep */
-#define INACTIVITY_TIMEOUT_MS 10000
-#define SLEEP_DURATION_SEC 60
+#define INACTIVITY_TIMEOUT_MS 60000
+#define SLEEP_DURATION_SEC 3600
 
 #endif

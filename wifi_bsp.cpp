@@ -5,6 +5,7 @@
 #include "user_config.h"
 #include "user_app.h"
 #include "src/ui/status_bar.h"
+#include "api_client.h"
 
 static const char *TAG_WIFI = "wifi";
 
@@ -36,6 +37,8 @@ void wifi_task(void *arg)
                 xEventGroupSetBits(wifi_event_group, WIFI_BIT_CONNECTED);
                 xEventGroupClearBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
                 Serial.printf("WiFi reconnected. IP: %s\n", WiFi.localIP().toString().c_str());
+                bool api_ok = api_health_check();
+                Serial.printf("API health: %s\n", api_ok ? "OK" : "FAIL");
             }
         } else {
             EventBits_t bits = xEventGroupGetBits(wifi_event_group);
