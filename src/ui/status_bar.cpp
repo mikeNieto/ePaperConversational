@@ -1,4 +1,5 @@
 #include "status_bar.h"
+#include "messages.h"
 
 static lv_obj_t* wifi_label = NULL;
 static lv_obj_t* battery_label = NULL;
@@ -75,7 +76,7 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
     lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     wifi_label = lv_label_create(top_bar);
-    lv_label_set_text(wifi_label, "WIFI: --");
+    lv_label_set_text(wifi_label, currentLang->wifi_off);
     lv_obj_set_pos(wifi_label, 4, 2);
     lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
@@ -97,7 +98,7 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
 
 void update_status_bar(lv_obj_t* bar, bool wifiOk, int batteryPct)
 {
-    if (wifi_label) lv_label_set_text(wifi_label, wifiOk ? "WIFI: OK" : "WIFI: --");
+    if (wifi_label) lv_label_set_text(wifi_label, wifiOk ? currentLang->wifi_ok : currentLang->wifi_off);
     if (battery_label) lv_label_set_text_fmt(battery_label, "%d%%", batteryPct);
     int bars = batteryPct / 25;
     if (bar_fill1) lv_obj_set_style_bg_color(bar_fill1, bars >= 1 ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
@@ -108,7 +109,7 @@ void update_status_bar(lv_obj_t* bar, bool wifiOk, int batteryPct)
 
 void status_bar_update_wifi(bool wifiOk)
 {
-    if (wifi_label) lv_label_set_text(wifi_label, wifiOk ? "WIFI: OK" : "WIFI: --");
+    if (wifi_label) lv_label_set_text(wifi_label, wifiOk ? currentLang->wifi_ok : currentLang->wifi_off);
 }
 
 void status_bar_set_visible(bool visible)

@@ -23,6 +23,7 @@
 #include "audio_bsp.h"
 #include "src/codec_board/codec_init.h"
 #include "api_client.h"
+#include "messages.h"
 
 RTC_DATA_ATTR int boot_count = 0;
 RTC_DATA_ATTR int sleep_counter = 0;
@@ -102,7 +103,6 @@ static void transcription_task(void *arg)
 
 static void chat_task(void *arg)
 {
-    Serial.printf("chat_task started\n");
     AppEvent evt;
     if (api_send_message(conversation_uuid, g_transcribed_text,
                           g_agent_text, sizeof(g_agent_text),
@@ -135,8 +135,6 @@ static void on_screen1_activate(int option)
 
 void switch_state(AppState new_state)
 {
-    Serial.printf("switch_state: %d -> %d\n", g_app_state, new_state);
-    Serial.flush();
     if (!lvgl_lock(2000)) return;
 
     g_btn_continuar = NULL;
@@ -192,8 +190,6 @@ void switch_state(AppState new_state)
     }
 
     activity_feed();
-    Serial.printf("switch_state: done\n");
-    Serial.flush();
 }
 
 static void state_task(void *arg)
@@ -235,7 +231,7 @@ static void state_task(void *arg)
                         lv_obj_t* err_scr = lv_obj_create(NULL);
                         lv_obj_set_style_bg_color(err_scr, lv_color_white(), LV_STATE_DEFAULT);
                         lv_obj_t* lbl = lv_label_create(err_scr);
-                        lv_label_set_text(lbl, "Error al transcribir");
+                        lv_label_set_text(lbl, currentLang->error_transcribir);
                         lv_obj_center(lbl);
                         lv_scr_load(err_scr);
                         lv_timer_handler();
@@ -266,7 +262,7 @@ static void state_task(void *arg)
                         lv_obj_t* err_scr = lv_obj_create(NULL);
                         lv_obj_set_style_bg_color(err_scr, lv_color_white(), LV_STATE_DEFAULT);
                         lv_obj_t* lbl = lv_label_create(err_scr);
-                        lv_label_set_text(lbl, "Error del servidor");
+                        lv_label_set_text(lbl, currentLang->error_servidor);
                         lv_obj_center(lbl);
                         lv_scr_load(err_scr);
                         lv_timer_handler();

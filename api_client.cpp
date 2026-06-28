@@ -6,13 +6,93 @@
 #include "esp_heap_caps.h"
 
 #define API_TIMEOUT_SHORT  5000
-#define API_TIMEOUT_LONG  120000
+#define API_TCP_TIMEOUT    120
 
 static String build_url(const char* path) {
     String url = API_BASE_URL;
     if (path[0] == '/') url += path;
     else { url += "/"; url += path; }
     return url;
+}
+
+static String build_host() {
+    String url = API_BASE_URL;
+    url.replace("http://", "");
+    return url;
+}
+
+static bool tcp_request(const char* method, const char* path,
+                         const char* content_type, const uint8_t* body, size_t body_len,
+                         String* response, int* http_code)
+{
+    String full = build_url(path);
+    String host;
+    int port = 80;
+    String url_path;
+    if (full.startsWith("http://")) {
+        full = full.substring(7);
+        int slash = full.indexOf('/');
+        if (slash > 0) { url_path = full.substring(slash); host = full.substring(0, slash); }
+        else { url_path = "/"; host = full; }
+        int colon = host.indexOf(':');
+        if (colon > 0) { port = host.substring(colon + 1).toInt(); host = host.substring(0, colon); }
+    }
+
+    WiFiClient client;
+    client.setTimeout(API_TCP_TIMEOUT);
+
+    if (!client.connect(host.c_str(), port)) {
+        Serial.printf("TCP connect failed\n");
+        return false;
+    }
+
+    client.printf("%s %s HTTP/1.1\r\n", method, url_path.c_str());
+    client.printf("Host: %s\r\n", host.c_str());
+    if (content_type) client.printf("Content-Type: %s\r\n", content_type);
+    if (body && body_len > 0) client.printf("Content-Length: %u\r\n", body_len);
+    client.print("Connection: close\r\n\r\n");
+    client.flush();
+
+    if (body && body_len > 0) {
+        size_t written = 0;
+        while (written < body_len) {
+            int w = client.write(body + written, body_len - written);
+            if (w <= 0) { client.stop(); return false; }
+            written += w;
+        }
+        client.flush();
+    }
+
+    unsigned long start = millis();
+    while (!client.available() && client.connected() && (millis() - start) < 120000) {
+        delay(10);
+    }
+
+    String line = client.readStringUntil('\n');
+    line.trim();
+    Serial.printf("HTTP line: %s\n", line.c_str());
+    if (http_code) {
+        int sp = line.indexOf(' ');
+        if (sp > 0) *http_code = line.substring(sp + 1, sp + 4).toInt();
+    }
+
+    while (client.connected()) {
+        String l = client.readStringUntil('\n');
+        if (l == "\r" || l.length() <= 1) break;
+    }
+
+    if (response) {
+        *response = "";
+        while (client.available() || client.connected()) {
+            if (client.available()) {
+                *response += client.readString();
+            }
+            delay(1);
+        }
+    }
+
+    client.stop();
+    return true;
 }
 
 bool api_health_check(void)
@@ -42,32 +122,29 @@ bool api_transcribe_audio(uint8_t* wav_buffer, size_t wav_size,
     memcpy(postData + bodyStart.length(), wav_buffer, wav_size);
     memcpy(postData + bodyStart.length() + wav_size, bodyEnd.c_str(), bodyEnd.length());
 
-    HTTPClient http;
-    http.begin(build_url("/api/audio/transcribe"));
-    http.setTimeout(API_TIMEOUT_LONG);
-    http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-
-    int code = http.POST(postData, totalSize);
+    String ct = "multipart/form-data; boundary=" + boundary;
+    String resp;
+    int code = 0;
+    bool ok = tcp_request("POST", "/api/audio/transcribe", ct.c_str(), postData, totalSize, &resp, &code);
     free(postData);
 
-    bool ok = false;
-    if (code == 200) {
-        String response = http.getString();
-        int idx = response.indexOf("\"original_text\":\"");
+    if (ok && code == 200 && resp.length() > 0) {
+        int idx = resp.indexOf("\"original_text\":\"");
         if (idx > 0) {
             idx += 17;
-            int end = response.indexOf("\"", idx);
+            int end = resp.indexOf("\"", idx);
             if (end > idx) {
-                String txt = response.substring(idx, end);
-                snprintf(transcribed_text, text_maxlen, "%s", txt.c_str());
-                ok = true;
+                snprintf(transcribed_text, text_maxlen, "%s", resp.substring(idx, end).c_str());
+                json_unescape_utf8(transcribed_text);
+                return true;
             }
         }
-        if (!ok) snprintf(transcribed_text, text_maxlen, "%s", response.c_str());
+        snprintf(transcribed_text, text_maxlen, "%s", resp.c_str());
+        return true;
     }
-    http.end();
-    json_unescape_utf8(transcribed_text);
-    return (code == 200);
+    if (!ok) Serial.printf("Transcribe: TCP error\n");
+    else Serial.printf("Transcribe HTTP %d\n", code);
+    return false;
 }
 
 bool api_send_message(const char* thread_id, const char* message,
@@ -79,77 +156,91 @@ bool api_send_message(const char* thread_id, const char* message,
     json += "\"message\":\"" + String(message) + "\",";
     json += "\"response_audio\":true}";
 
-    HTTPClient http;
-    http.begin(build_url("/api/chat/message"));
-    http.setTimeout(API_TIMEOUT_LONG);
-    http.addHeader("Content-Type", "application/json");
+    String resp;
+    int code = 0;
+    if (!tcp_request("POST", "/api/chat/message", "application/json",
+                      (const uint8_t*)json.c_str(), json.length(), &resp, &code)) {
+        return false;
+    }
 
-    int code = http.POST(json);
-    bool ok = false;
-
-    if (code == 200) {
-        String response = http.getString();
-
-        int idx = response.indexOf("\"agent_text\":\"");
-        if (idx > 0) {
-            idx += 15;
-            int end = response.indexOf("\",", idx);
-            if (end < 0) end = response.indexOf("\"}", idx);
-            if (end > idx) {
-                snprintf(agent_text, text_maxlen, "%s", response.substring(idx, end).c_str());
-            }
-        }
-
-        idx = response.indexOf("\"audio_url\":\"");
+    if (code == 200 && resp.length() > 0) {
+        int idx = resp.indexOf("\"agent_text\":\"");
         if (idx > 0) {
             idx += 14;
-            int end = response.indexOf("\"", idx);
-            if (end > idx) {
-                snprintf(audio_url, url_maxlen, "%s", response.substring(idx, end).c_str());
-            }
+            int end = resp.indexOf("\",", idx);
+            if (end < 0) end = resp.indexOf("\"}", idx);
+            if (end > idx)
+                snprintf(agent_text, text_maxlen, "%s", resp.substring(idx, end).c_str());
         }
-        ok = true;
+        idx = resp.indexOf("\"audio_url\":\"");
+        if (idx > 0) {
+            idx += 14;
+            int end = resp.indexOf("\"", idx);
+            if (end > idx)
+                snprintf(audio_url, url_maxlen, "%s", resp.substring(idx, end).c_str());
+        }
+        json_unescape_utf8(agent_text);
+        return true;
     }
-    http.end();
-    json_unescape_utf8(agent_text);
-    return (code == 200);
+    return false;
 }
 
 bool api_download_audio(const char* audio_url, uint8_t** mp3_buffer, size_t* mp3_size)
 {
-    HTTPClient http;
-    http.begin(build_url(audio_url));
-    http.setTimeout(API_TIMEOUT_LONG);
-
-    int code = http.GET();
-    if (code != 200) {
-        http.end();
-        return false;
+    String full = build_url(audio_url);
+    String host;
+    int port = 80;
+    String path;
+    if (full.startsWith("http://")) {
+        full = full.substring(7);
+        int slash = full.indexOf('/');
+        if (slash > 0) { path = full.substring(slash); host = full.substring(0, slash); }
+        else { path = "/"; host = full; }
+        int colon = host.indexOf(':');
+        if (colon > 0) { port = host.substring(colon + 1).toInt(); host = host.substring(0, colon); }
+    } else {
+        path = full;
+        host = build_host();
+        port = 8000;
     }
 
-    int len = http.getSize();
+    WiFiClient client;
+    client.setTimeout(API_TCP_TIMEOUT);
+
+    if (!client.connect(host.c_str(), port)) return false;
+
+    client.printf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path.c_str(), host.c_str());
+    client.flush();
+
+    String line = client.readStringUntil('\n');
+    int sp = line.indexOf(' ');
+    int code = (sp > 0) ? line.substring(sp + 1, sp + 4).toInt() : 0;
+    if (code != 200) { client.stop(); return false; }
+
+    int len = 0;
+    while (client.connected()) {
+        String l = client.readStringUntil('\n');
+        if (l.startsWith("Content-Length:")) len = l.substring(15).toInt();
+        if (l == "\r" || l.length() <= 1) break;
+    }
     if (len <= 0) len = 256 * 1024;
 
     uint8_t* buf = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
-    if (!buf) {
-        http.end();
-        return false;
-    }
+    if (!buf) { client.stop(); return false; }
 
-    WiFiClient* stream = http.getStreamPtr();
     size_t total = 0;
-    while (http.connected() && total < (size_t)len) {
-        int available = stream->available();
+    while (client.connected() && total < (size_t)len) {
+        int available = client.available();
         if (available > 0) {
             int toRead = available;
             if (total + toRead > (size_t)len) toRead = len - total;
-            int r = stream->readBytes(buf + total, toRead);
+            int r = client.readBytes(buf + total, toRead);
             if (r > 0) total += r;
         }
         delay(1);
     }
 
-    http.end();
+    client.stop();
     *mp3_buffer = buf;
     *mp3_size = total;
     return (total > 0);
