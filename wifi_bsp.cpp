@@ -2,17 +2,38 @@
 #include <WiFi.h>
 #include "wifi_bsp.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "user_config.h"
 #include "user_app.h"
 #include "src/ui/status_bar.h"
 #include "api_client.h"
 
 static const char *TAG_WIFI = "wifi";
+static bool led_state = false;
+
+#define LED_PIN GPIO_NUM_3
+
+static void led_init(void)
+{
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = (1ULL << LED_PIN);
+    cfg.mode = GPIO_MODE_OUTPUT;
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    cfg.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&cfg);
+    gpio_set_level(LED_PIN, 0);
+}
+
+static void led_set(bool on)
+{
+    gpio_set_level(LED_PIN, on ? 1 : 0);
+}
 
 EventGroupHandle_t wifi_event_group = NULL;
 
 void wifi_init(void)
 {
+    led_init();
     wifi_event_group = xEventGroupCreate();
     xEventGroupSetBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
 
@@ -32,6 +53,7 @@ void wifi_task(void *arg)
 {
     for (;;) {
         if (WiFi.status() == WL_CONNECTED) {
+            led_set(false);
             EventBits_t bits = xEventGroupGetBits(wifi_event_group);
             if (!(bits & WIFI_BIT_CONNECTED)) {
                 xEventGroupSetBits(wifi_event_group, WIFI_BIT_CONNECTED);
@@ -41,6 +63,8 @@ void wifi_task(void *arg)
                 Serial.printf("API health: %s\n", api_ok ? "OK" : "FAIL");
             }
         } else {
+            led_state = !led_state;
+            led_set(led_state);
             EventBits_t bits = xEventGroupGetBits(wifi_event_group);
             if (bits & WIFI_BIT_CONNECTED) {
                 xEventGroupClearBits(wifi_event_group, WIFI_BIT_CONNECTED);

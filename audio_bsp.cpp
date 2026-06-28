@@ -157,6 +157,9 @@ void audio_start_recording(void)
         rec_buffer = (uint8_t*)heap_caps_malloc(REC_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
         if (!rec_buffer) {
             Serial.printf("ERROR: Cannot allocate %u bytes in PSRAM for recording\n", REC_BUFFER_SIZE);
+            Serial.printf("FATAL: PSRAM insufficient, restarting...\n");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            ESP.restart();
             return;
         }
     }

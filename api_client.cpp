@@ -70,7 +70,6 @@ static bool tcp_request(const char* method, const char* path,
 
     String line = client.readStringUntil('\n');
     line.trim();
-    Serial.printf("HTTP line: %s\n", line.c_str());
     if (http_code) {
         int sp = line.indexOf(' ');
         if (sp > 0) *http_code = line.substring(sp + 1, sp + 4).toInt();
@@ -213,6 +212,7 @@ bool api_download_audio(const char* audio_url, uint8_t** mp3_buffer, size_t* mp3
     client.flush();
 
     String line = client.readStringUntil('\n');
+    line.trim();
     int sp = line.indexOf(' ');
     int code = (sp > 0) ? line.substring(sp + 1, sp + 4).toInt() : 0;
     if (code != 200) { client.stop(); return false; }

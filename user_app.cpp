@@ -81,6 +81,21 @@ void highlight_selection(void)
     }
 }
 
+static void show_error_message(const char* msg, int duration_ms)
+{
+    if (lvgl_lock(2000)) {
+        lv_obj_t* scr = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(scr, lv_color_white(), LV_STATE_DEFAULT);
+        lv_obj_t* lbl = lv_label_create(scr);
+        lv_label_set_text(lbl, msg);
+        lv_obj_center(lbl);
+        lv_scr_load(scr);
+        lv_timer_handler();
+        lvgl_unlock();
+    }
+    vTaskDelay(pdMS_TO_TICKS(duration_ms));
+}
+
 static void transcription_task(void *arg)
 {
     uint8_t* wav = audio_get_wav_buffer();
@@ -113,7 +128,8 @@ static void chat_task(void *arg)
             Serial.printf("MP3 downloaded: %u bytes\n", g_mp3_size);
             evt.type = EVT_CHAT_OK;
         } else {
-            evt.type = EVT_CHAT_FAIL;
+            Serial.printf("MP3 download failed\n");
+            evt.type = EVT_DOWNLOAD_FAIL;
         }
     } else {
         evt.type = EVT_CHAT_FAIL;
@@ -227,17 +243,7 @@ static void state_task(void *arg)
                 if (evt.type == EVT_TRANSCRIBE_OK) {
                     switch_state(STATE_CONFIRM);
                 } else if (evt.type == EVT_TRANSCRIBE_FAIL) {
-                    if (lvgl_lock(200)) {
-                        lv_obj_t* err_scr = lv_obj_create(NULL);
-                        lv_obj_set_style_bg_color(err_scr, lv_color_white(), LV_STATE_DEFAULT);
-                        lv_obj_t* lbl = lv_label_create(err_scr);
-                        lv_label_set_text(lbl, currentLang->error_transcribir);
-                        lv_obj_center(lbl);
-                        lv_scr_load(err_scr);
-                        lv_timer_handler();
-                        lvgl_unlock();
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    show_error_message(currentLang->error_transcribir, 2000);
                     switch_state(STATE_RECORD);
                 }
             } else if (g_app_state == STATE_CONFIRM) {
@@ -258,17 +264,10 @@ static void state_task(void *arg)
                 if (evt.type == EVT_CHAT_OK) {
                     switch_state(STATE_RESPONSE);
                 } else if (evt.type == EVT_CHAT_FAIL) {
-                    if (lvgl_lock(200)) {
-                        lv_obj_t* err_scr = lv_obj_create(NULL);
-                        lv_obj_set_style_bg_color(err_scr, lv_color_white(), LV_STATE_DEFAULT);
-                        lv_obj_t* lbl = lv_label_create(err_scr);
-                        lv_label_set_text(lbl, currentLang->error_servidor);
-                        lv_obj_center(lbl);
-                        lv_scr_load(err_scr);
-                        lv_timer_handler();
-                        lvgl_unlock();
-                    }
-                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    show_error_message(currentLang->error_servidor, 2000);
+                    switch_state(STATE_RECORD);
+                } else if (evt.type == EVT_DOWNLOAD_FAIL) {
+                    show_error_message("Error al descargar audio", 2000);
                     switch_state(STATE_RECORD);
                 }
             } else if (g_app_state == STATE_RESPONSE) {

@@ -30,6 +30,7 @@ typedef struct {
 #define EVT_CHAT_OK            7
 #define EVT_CHAT_FAIL          8
 #define EVT_MP3_DONE           9
+#define EVT_DOWNLOAD_FAIL     10
 
 typedef enum {
     STATE_DEEP_SLEEP = 0,
