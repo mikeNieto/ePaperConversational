@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "audio_bsp.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -171,9 +172,7 @@ uint32_t audio_stop_recording(void)
     recording_active = false;
     uint32_t bytes = 0;
     if (rec_task_handle) {
-        while (rec_task_handle) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+        while (rec_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
     }
     bytes = rec_bytes_written;
     esp_codec_dev_close(record);
@@ -187,9 +186,7 @@ void audio_discard_recording(void)
 {
     recording_active = false;
     if (rec_task_handle) {
-        while (rec_task_handle) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
+        while (rec_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
     }
     esp_codec_dev_close(record);
     esp_codec_dev_close(playback);
@@ -210,4 +207,108 @@ uint8_t* audio_get_wav_buffer(void)
 uint32_t audio_get_wav_size(void)
 {
     return 44 + rec_bytes_written;
+}
+
+/* ---------- MP3 playback ---------- */
+#define MINIMP3_IMPLEMENTATION
+#include "minimp3.h"
+
+static uint8_t* mp3_buffer = NULL;
+static size_t mp3_size = 0;
+static volatile bool mp3_playing = false;
+static volatile bool mp3_stop_flag = false;
+static volatile bool mp3_replay_flag = false;
+static TaskHandle_t mp3_task_handle = NULL;
+
+static void mp3_playback_task(void *arg)
+{
+    esp_codec_dev_close(playback);
+    esp_codec_dev_close(record);
+    codec_opened = false;
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    mp3d_sample_t* pcm = (mp3d_sample_t*)malloc(sizeof(mp3d_sample_t) * MINIMP3_MAX_SAMPLES_PER_FRAME);
+    if (!pcm) { mp3_playing = false; mp3_task_handle = NULL; vTaskDelete(NULL); return; }
+
+    int sr = 44100;
+    int ch = 2;
+    {
+        mp3dec_t d;
+        mp3dec_frame_info_t inf;
+        mp3dec_init(&d);
+        if (mp3dec_decode_frame(&d, mp3_buffer, (int)mp3_size, pcm, &inf) > 0 && inf.hz > 0) {
+            sr = inf.hz;
+            ch = inf.channels > 0 ? inf.channels : 2;
+        }
+    }
+
+    esp_codec_dev_sample_info_t fs = {};
+    fs.sample_rate = sr;
+    fs.channel = ch;
+    fs.bits_per_sample = 16;
+    esp_codec_dev_set_out_vol(playback, 100.0);
+    esp_codec_dev_open(playback, &fs);
+    codec_opened = true;
+    Serial.printf("MP3 playback: %d Hz, %d ch\n", sr, ch);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    mp3dec_t dec;
+    mp3dec_init(&dec);
+    mp3dec_frame_info_t info;
+    uint8_t* ptr = mp3_buffer;
+    int remaining = (int)mp3_size;
+
+    while (remaining > 0 && !mp3_stop_flag) {
+        if (mp3_replay_flag) {
+            mp3_replay_flag = false;
+            mp3dec_init(&dec);
+            ptr = mp3_buffer;
+            remaining = (int)mp3_size;
+        }
+        int samples = mp3dec_decode_frame(&dec, ptr, remaining, pcm, &info);
+        if (samples <= 0) break;
+        ptr += info.frame_bytes;
+        remaining -= info.frame_bytes;
+        esp_codec_dev_write(playback, pcm, samples * info.channels * 2);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    esp_codec_dev_close(playback);
+    codec_opened = false;
+    mp3_playing = false;
+    mp3_task_handle = NULL;
+    free(pcm);
+    Serial.printf("MP3 playback finished\n");
+    vTaskDelete(NULL);
+}
+
+void audio_play_mp3_start(uint8_t* buf, size_t size)
+{
+    if (mp3_playing) {
+        mp3_stop_flag = true;
+        while (mp3_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    mp3_buffer = buf;
+    mp3_size = size;
+    mp3_stop_flag = false;
+    mp3_replay_flag = false;
+    mp3_playing = true;
+    xTaskCreatePinnedToCore(mp3_playback_task, "mp3_task", 40 * 1024, NULL, 5, &mp3_task_handle, 1);
+}
+
+void audio_play_mp3_stop(void)
+{
+    mp3_stop_flag = true;
+    while (mp3_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    mp3_playing = false;
+}
+
+void audio_play_mp3_replay(void)
+{
+    if (mp3_playing) mp3_replay_flag = true;
+}
+
+bool audio_mp3_is_playing(void)
+{
+    return mp3_playing;
 }

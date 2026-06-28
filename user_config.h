@@ -53,7 +53,7 @@
 #define WIFI_PASSWORD "MY_WIFI_PASSWORD"
 
 /* API */
-#define API_BASE_URL "http://1.1.1.1:1234"
+#define API_BASE_URL "MY_API_BASE_URL"
 #define USER_ID "esp32-user-01"
 
 /* Deep Sleep */

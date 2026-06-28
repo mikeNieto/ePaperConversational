@@ -27,6 +27,9 @@ typedef struct {
 #define EVT_RECORDING_DONE    4
 #define EVT_TRANSCRIBE_OK     5
 #define EVT_TRANSCRIBE_FAIL   6
+#define EVT_CHAT_OK            7
+#define EVT_CHAT_FAIL          8
+#define EVT_MP3_DONE           9
 
 typedef enum {
     STATE_DEEP_SLEEP = 0,

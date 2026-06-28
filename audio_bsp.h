@@ -19,6 +19,11 @@ void audio_discard_recording(void);
 uint8_t* audio_get_wav_buffer(void);
 uint32_t audio_get_wav_size(void);
 
+void audio_play_mp3_start(uint8_t* mp3_buffer, size_t mp3_size);
+void audio_play_mp3_stop(void);
+void audio_play_mp3_replay(void);
+bool audio_mp3_is_playing(void);
+
 #ifdef __cplusplus
 }
 #endif

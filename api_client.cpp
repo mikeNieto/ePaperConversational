@@ -6,7 +6,7 @@
 #include "esp_heap_caps.h"
 
 #define API_TIMEOUT_SHORT  5000
-#define API_TIMEOUT_LONG   20000
+#define API_TIMEOUT_LONG  120000
 
 static String build_url(const char* path) {
     String url = API_BASE_URL;
@@ -53,9 +53,9 @@ bool api_transcribe_audio(uint8_t* wav_buffer, size_t wav_size,
     bool ok = false;
     if (code == 200) {
         String response = http.getString();
-        int idx = response.indexOf("\"text\":\"");
+        int idx = response.indexOf("\"original_text\":\"");
         if (idx > 0) {
-            idx += 8;
+            idx += 17;
             int end = response.indexOf("\"", idx);
             if (end > idx) {
                 String txt = response.substring(idx, end);
@@ -66,6 +66,7 @@ bool api_transcribe_audio(uint8_t* wav_buffer, size_t wav_size,
         if (!ok) snprintf(transcribed_text, text_maxlen, "%s", response.c_str());
     }
     http.end();
+    json_unescape_utf8(transcribed_text);
     return (code == 200);
 }
 
@@ -110,6 +111,7 @@ bool api_send_message(const char* thread_id, const char* message,
         ok = true;
     }
     http.end();
+    json_unescape_utf8(agent_text);
     return (code == 200);
 }
 
@@ -151,4 +153,51 @@ bool api_download_audio(const char* audio_url, uint8_t** mp3_buffer, size_t* mp3
     *mp3_buffer = buf;
     *mp3_size = total;
     return (total > 0);
+}
+
+static int hex_to_int(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+
+void json_unescape_utf8(char* str)
+{
+    char* src = str;
+    char* dst = str;
+    while (*src) {
+        if (*src == '\\' && *(src + 1) == 'u') {
+            uint16_t cp = (hex_to_int(src[2]) << 12) |
+                          (hex_to_int(src[3]) << 8)  |
+                          (hex_to_int(src[4]) << 4)  |
+                          hex_to_int(src[5]);
+            if (cp < 0x80) {
+                *dst++ = (char)cp;
+            } else if (cp < 0x800) {
+                *dst++ = (char)(0xC0 | (cp >> 6));
+                *dst++ = (char)(0x80 | (cp & 0x3F));
+            } else {
+                *dst++ = (char)(0xE0 | (cp >> 12));
+                *dst++ = (char)(0x80 | ((cp >> 6) & 0x3F));
+                *dst++ = (char)(0x80 | (cp & 0x3F));
+            }
+            src += 6;
+        } else if (*src == '\\') {
+            src++;
+            switch (*src) {
+                case 'n': *dst++ = '\n'; break;
+                case 't': *dst++ = '\t'; break;
+                case 'r': *dst++ = '\r'; break;
+                case '"': *dst++ = '"'; break;
+                case '\\': *dst++ = '\\'; break;
+                default: *dst++ = *src; break;
+            }
+            src++;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
 }
