@@ -158,12 +158,20 @@ lv_obj_t* create_screen_4_confirm(const char* transcribedText, bool hasTouch)
 
     create_status_bar(screen);
 
-    lv_obj_t* text_label = lv_label_create(screen);
+    lv_obj_t* cont = lv_obj_create(screen);
+    lv_obj_set_size(cont, 180, 108);
+    lv_obj_set_pos(cont, 10, STATUS_BAR_H + 4);
+    lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
+    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+
+    lv_obj_t* text_label = lv_label_create(cont);
     lv_label_set_long_mode(text_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(text_label, 180);
+    lv_obj_set_width(text_label, lv_pct(100));
     lv_obj_set_style_text_align(text_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(text_label, transcribedText);
-    lv_obj_set_pos(text_label, 10, STATUS_BAR_H + 4);
     lv_obj_set_style_text_font(text_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     lv_obj_t* btn_send = lv_btn_create(screen);
@@ -214,12 +222,20 @@ lv_obj_t* create_screen_6_response(const char* agentText)
 
     create_status_bar(screen);
 
-    lv_obj_t* label = lv_label_create(screen);
+    lv_obj_t* cont = lv_obj_create(screen);
+    lv_obj_set_size(cont, 180, 170);
+    lv_obj_set_pos(cont, 10, STATUS_BAR_H + 4);
+    lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
+    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+
+    lv_obj_t* label = lv_label_create(cont);
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(label, 180);
+    lv_obj_set_width(label, lv_pct(100));
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(label, agentText);
-    lv_obj_center(label);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     return screen;

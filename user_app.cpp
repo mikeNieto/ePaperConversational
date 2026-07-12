@@ -51,6 +51,10 @@ char g_audio_url[256] = {0};
 uint8_t* g_mp3_buffer = NULL;
 size_t g_mp3_size = 0;
 
+static lv_coord_t last_touch_x = 0;
+static lv_coord_t last_touch_y = 0;
+static bool last_touch_pressed = false;
+
 QueueHandle_t state_queue = NULL;
 
 void generate_uuid(char* buf, size_t len)
@@ -340,6 +344,13 @@ static void lvgl_port_task(void *arg)
     }
 }
 
+static void lvgl_touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data)
+{
+    data->point.x = last_touch_x;
+    data->point.y = last_touch_y;
+    data->state = last_touch_pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+}
+
 void lvgl_port_init(void)
 {
     lv_init();
@@ -367,6 +378,12 @@ void lvgl_port_init(void)
     disp_drv.draw_buf = &disp_buf;
     disp_drv.full_refresh = 1;
     lv_disp_drv_register(&disp_drv);
+
+    static lv_indev_drv_t indev_drv;
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = lvgl_touch_read_cb;
+    lv_indev_drv_register(&indev_drv);
 
     esp_timer_create_args_t lvgl_tick_timer_args = {};
     lvgl_tick_timer_args.callback = &example_increase_lvgl_tick;
@@ -518,23 +535,16 @@ void touch_task(void *arg)
             activity_feed();
             uint16_t x, y;
             if (ft6336->GetTouchPoint(&x, &y)) {
+                last_touch_x = (lv_coord_t)x;
+                last_touch_y = (lv_coord_t)y;
+                last_touch_pressed = true;
                 xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
                 Serial.printf("Touch: (%d,%d)\n", x, y);
                 Serial.flush();
                 activity_feed();
 
                 if (g_app_state == STATE_ACTIVE) {
-                    int opt = -1;
-                    if (uuid_is_null) {
-                        if (x >= 10 && x <= 190 && y >= 80 && y <= 120) opt = 1;
-                    } else {
-                        if (x >= 10 && x <= 190 && y >= 52 && y <= 92) opt = 0;
-                        if (x >= 10 && x <= 190 && y >= 108 && y <= 148) opt = 1;
-                    }
-                    if (opt >= 0) {
-                        AppEvent evt = { EVT_TOUCH_OPTION, (uint8_t)opt };
-                        xQueueSend(state_queue, &evt, 0);
-                    }
+                    // LVGL buttons handle clicks via on_btn_* callbacks
                 } else if (g_app_state == STATE_RECORD) {
                     AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
                     xQueueSend(state_queue, &evt, 0);
@@ -542,17 +552,13 @@ void touch_task(void *arg)
                     AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
                     xQueueSend(state_queue, &evt, 0);
                 } else if (g_app_state == STATE_CONFIRM) {
-                    int opt = -1;
-                    if (x >= 20 && x <= 180 && y >= 120 && y <= 156) opt = 0;
-                    if (x >= 20 && x <= 180 && y >= 160 && y <= 196) opt = 1;
-                    if (opt >= 0) {
-                        AppEvent evt = { EVT_TOUCH_OPTION, (uint8_t)opt };
-                        xQueueSend(state_queue, &evt, 0);
-                    }
+                    // LVGL buttons handle clicks via on_btn_* callbacks
                 } else if (g_app_state == STATE_RESPONSE) {
                     audio_play_mp3_replay();
                     activity_feed();
                 }
+            } else {
+                last_touch_pressed = false;
             }
         }
     }

@@ -272,8 +272,16 @@ static void mp3_playback_task(void *arg)
         if (samples <= 0) break;
         ptr += info.frame_bytes;
         remaining -= info.frame_bytes;
-        esp_codec_dev_write(playback, pcm, samples * info.channels * 2);
-        vTaskDelay(pdMS_TO_TICKS(1));
+
+        int total_bytes = samples * info.channels * 2;
+        uint8_t* pcm_bytes = (uint8_t*)pcm;
+        while (total_bytes > 0 && !mp3_stop_flag) {
+            int chunk = total_bytes > 256 ? 256 : total_bytes;
+            esp_codec_dev_write(playback, pcm_bytes, chunk);
+            pcm_bytes += chunk;
+            total_bytes -= chunk;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
     }
 
     esp_codec_dev_close(playback);
