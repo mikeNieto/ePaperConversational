@@ -19,7 +19,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - **Single core (Core 1)**: all FreeRTOS tasks pinned to Core 1 via `xTaskCreatePinnedToCore(..., 1)`
 - **Task list** (name, priority, stack):
   - `LVGL` (4, 8KB) — LVGL tick handler, render loop, owns the LVGL mutex
-  - `ws_task` (3, 12KB) — WebSocket connect/poll/send/receive, JSON parsing, audio buffer mgmt
+  - `ws_task` (3, 20KB) — WebSocket connect/poll/send/receive, JSON parsing, audio buffer mgmt (needs 20KB due to String URL parsing + large local vars)
   - `state_task` (3, 8KB) — state machine consuming `state_queue` events, drives screen transitions
   - `button_task` (3, 4KB) — polls `boot_groups`/`pwr_groups` event bits, sends `AppEvent` to `state_queue`
   - `touch_task` (3, 4KB) — **only created if FT6336 detected**; sends `AppEvent` to `state_queue`
@@ -36,7 +36,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - Touch: `lv_indev_touch_read_cb` reads from global `last_touch_x/y/pressed` set by `touch_task`
   - `lv_tick_inc(5)` driven by `esp_timer` at 5ms period
 - **WebSocket communication** (not REST): all audio/data flows through a single WebSocket to `ws://<host>:<port>/ws`
-  - Binary messages = MP3 audio from backend; text messages = JSON status/token/text/done/error
+  - Binary messages = MP3 or PCM audio from backend; text messages = JSON status/token/text/done/error and streaming control (`audio_start`/`audio_end` for PCM chunks)
   - Client sends: binary WAV audio + `{"type":"audio_end"}` text message
   - Thread-safe via `ws_cmd_queue` (FreeRTOS queue of `WsCmd` struct)
   - **No ArduinoJson** — JSON parsed with hand-rolled `parse_json_string()` via `String::indexOf` (requires Arduino's String class)
