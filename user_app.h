@@ -7,6 +7,7 @@
 #include "src/display/epaper_driver_bsp.h"
 #include "src/power/board_power_bsp.h"
 #include "src/ui/screens.h"
+#include "user_config.h"
 
 extern epaper_driver_display *driver;
 extern board_power_bsp_t board_div;
@@ -41,7 +42,7 @@ typedef enum {
 } AppState;
 
 extern AppState g_app_state;
-extern char g_agent_text[1024];
+extern char g_agent_text[AGENT_TEXT_SIZE];
 
 void switch_state(AppState new_state);
 

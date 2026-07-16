@@ -202,6 +202,16 @@ void audio_discard_recording(void)
     Serial.printf("Recording discarded.\n");
 }
 
+void audio_free_recording_buffer(void)
+{
+    if (rec_buffer) {
+        free(rec_buffer);
+        rec_buffer = NULL;
+        Serial.printf("Recording buffer freed, heap=%u\n", esp_get_free_heap_size());
+    }
+    rec_bytes_written = 0;
+}
+
 uint8_t* audio_get_wav_buffer(void)
 {
     return rec_buffer;
@@ -220,6 +230,10 @@ static volatile bool wav_playing = false;
 static volatile bool wav_stop_flag = false;
 static volatile bool wav_replay_flag = false;
 static TaskHandle_t wav_task_handle = NULL;
+static bool wav_pcm_override = false;
+static int wav_pcm_sr = 0;
+static int wav_pcm_ch = 0;
+static int wav_pcm_bps = 0;
 
 static bool parse_wav_header(uint8_t* buf, size_t size, int* sr, int* ch, int* bps, uint32_t* data_offset, uint32_t* data_size)
 {
@@ -258,14 +272,23 @@ static bool parse_wav_header(uint8_t* buf, size_t size, int* sr, int* ch, int* b
 
 static void wav_playback_task(void *arg)
 {
-    esp_codec_dev_close(playback);
-    esp_codec_dev_close(record);
-    codec_opened = false;
+    if (codec_opened) {
+        esp_codec_dev_close(playback);
+        esp_codec_dev_close(record);
+        codec_opened = false;
+    }
     vTaskDelay(pdMS_TO_TICKS(50));
 
     int sr, ch, bps;
     uint32_t data_offset, data_size;
-    if (!parse_wav_header(wav_buffer, wav_size, &sr, &ch, &bps, &data_offset, &data_size)) {
+    if (wav_pcm_override) {
+        sr = wav_pcm_sr;
+        ch = wav_pcm_ch;
+        bps = wav_pcm_bps;
+        data_offset = 0;
+        data_size = (uint32_t)wav_size;
+        wav_pcm_override = false;
+    } else if (!parse_wav_header(wav_buffer, wav_size, &sr, &ch, &bps, &data_offset, &data_size)) {
         Serial.printf("WAV: invalid header\n");
         wav_playing = false;
         wav_task_handle = NULL;
@@ -296,11 +319,15 @@ static void wav_playback_task(void *arg)
             pos = 0;
             remaining = data_size;
         }
-        uint32_t chunk = remaining > 256 ? 256 : remaining;
-        esp_codec_dev_write(playback, ptr + pos, chunk);
-        pos += chunk;
-        remaining -= chunk;
-        vTaskDelay(pdMS_TO_TICKS(1));
+        uint32_t chunk = remaining > 1024 ? 1024 : remaining;
+        int ret = esp_codec_dev_write(playback, ptr + pos, chunk);
+        if (ret == ESP_CODEC_DEV_OK) {
+            pos += chunk;
+            remaining -= chunk;
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 
     esp_codec_dev_close(playback);
@@ -320,6 +347,25 @@ void audio_play_wav_start(uint8_t* buf, size_t size)
     }
     wav_buffer = buf;
     wav_size = size;
+    wav_pcm_override = false;
+    wav_stop_flag = false;
+    wav_replay_flag = false;
+    wav_playing = true;
+    xTaskCreatePinnedToCore(wav_playback_task, "wav_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
+}
+
+void audio_play_pcm_start(uint8_t* pcm_data, size_t pcm_size, int sample_rate, int channels, int bits)
+{
+    if (wav_playing) {
+        wav_stop_flag = true;
+        while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    wav_buffer = pcm_data;
+    wav_size = pcm_size;
+    wav_pcm_override = true;
+    wav_pcm_sr = sample_rate;
+    wav_pcm_ch = channels;
+    wav_pcm_bps = bits;
     wav_stop_flag = false;
     wav_replay_flag = false;
     wav_playing = true;

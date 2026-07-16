@@ -54,6 +54,8 @@
 
 /* WebSocket */
 #define WS_REQUEST_TIMEOUT_MS 600000
+#define AGENT_TEXT_SIZE 4096
+#define _WS_CONFIG_MAX_MESSAGE_SIZE (512 * 1024)
 
 #include "user_config_secrets.h"
 

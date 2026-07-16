@@ -16,6 +16,7 @@ void audio_playback_write(void *data_ptr, uint32_t len);
 void audio_start_recording(void);
 uint32_t audio_stop_recording(void);
 void audio_discard_recording(void);
+void audio_free_recording_buffer(void);
 uint8_t* audio_get_wav_buffer(void);
 uint32_t audio_get_wav_size(void);
 
@@ -23,6 +24,7 @@ void audio_play_wav_start(uint8_t* wav_buffer, size_t wav_size);
 void audio_play_wav_stop(void);
 void audio_play_wav_replay(void);
 bool audio_wav_is_playing(void);
+void audio_play_pcm_start(uint8_t* pcm_data, size_t pcm_size, int sample_rate, int channels, int bits);
 
 #ifdef __cplusplus
 }

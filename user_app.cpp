@@ -38,7 +38,7 @@ static QueueHandle_t gpio_evt_queue = NULL;
 TaskHandle_t sleep_timer_handle = NULL;
 
 AppState g_app_state = STATE_CONNECTING;
-char g_agent_text[1024] = {0};
+char g_agent_text[AGENT_TEXT_SIZE] = {0};
 
 static lv_coord_t last_touch_x = 0;
 static lv_coord_t last_touch_y = 0;
@@ -77,6 +77,7 @@ void switch_state(AppState new_state)
         audio_start_recording();
         new_scr = create_screen_2b_listening();
     } else if (new_state == STATE_RECEIVING) {
+        audio_free_recording_buffer();
         new_scr = create_screen_receiving();
     } else if (new_state == STATE_RESPONSE) {
         new_scr = create_screen_6_response(g_agent_text);
@@ -97,7 +98,12 @@ void switch_state(AppState new_state)
         uint8_t* wav_buf = ws_get_audio_buffer();
         size_t wav_sz = ws_get_audio_size();
         if (wav_buf && wav_sz > 0) {
-            audio_play_wav_start(wav_buf, wav_sz);
+            if (ws_audio_is_pcm()) {
+                audio_play_pcm_start(wav_buf, wav_sz,
+                    ws_audio_get_sample_rate(), ws_audio_get_channels(), ws_audio_get_bits());
+            } else {
+                audio_play_wav_start(wav_buf, wav_sz);
+            }
         }
     }
 
@@ -616,7 +622,7 @@ void user_app_init(void)
     audio_bsp_init();
 
     ws_init();
-    xTaskCreatePinnedToCore(ws_task, "ws_task", 12 * 1024, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(ws_task, "ws_task", 20 * 1024, NULL, 3, NULL, 1);
 
     Serial.printf("Boot count: %d  Sleep counter: %d\n", boot_count, sleep_counter);
     Serial.flush();

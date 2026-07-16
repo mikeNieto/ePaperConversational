@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include "user_config.h"
 #include <ArduinoWebsockets.h>
 #include "ws_client.h"
 #include "user_app.h"
-#include "user_config.h"
 #include "wifi_bsp.h"
 #include "src/ui/screens.h"
 #include "messages.h"
@@ -20,8 +20,15 @@ static bool waiting_response = false;
 
 static uint8_t* audio_buffer = NULL;
 static size_t audio_size = 0;
+static size_t audio_offset = 0;
+static size_t audio_capacity = 0;
+static bool audio_streaming = false;
+static int audio_sr = 24000;
+static int audio_ch = 1;
+static int audio_bps = 16;
+static bool audio_is_pcm = false;
 
-static char agent_text[1024] = {0};
+static char agent_text[AGENT_TEXT_SIZE] = {0};
 static size_t agent_text_len = 0;
 
 typedef enum { WS_CMD_SEND_AUDIO, WS_CMD_RECONNECT } WsCmdType;
@@ -36,17 +43,23 @@ static QueueHandle_t ws_cmd_queue = NULL;
 static void parse_json_string(const char* str, const char* key, char* out, size_t out_max)
 {
     out[0] = '\0';
-    String haystack = String(str);
-    String search = String("\"") + key + "\":\"";
-    int idx = haystack.indexOf(search);
-    if (idx < 0) return;
-    idx += search.length();
-    int end = haystack.indexOf("\"", idx);
-    if (end < 0) return;
-    int len = end - idx;
-    if (len <= 0) return;
-    if ((size_t)len >= out_max) len = out_max - 1;
-    memcpy(out, haystack.c_str() + idx, len);
+    if (out_max == 0) return;
+
+    char search[64];
+    int search_len = snprintf(search, sizeof(search), "\"%s\":\"", key);
+    if (search_len < 0 || search_len >= (int)sizeof(search)) return;
+
+    const char* start = strstr(str, search);
+    if (!start) return;
+    start += search_len;
+
+    const char* end = strchr(start, '"');
+    if (!end) return;
+
+    size_t len = (size_t)(end - start);
+    if (len == 0) return;
+    if (len >= out_max) len = out_max - 1;
+    memcpy(out, start, len);
     out[len] = '\0';
 
     for (int i = 0; out[i]; i++) {
@@ -60,8 +73,21 @@ static void parse_json_string(const char* str, const char* key, char* out, size_
 
 static bool parse_json_has_type(const char* str, const char* type_val)
 {
-    String s = String(str);
-    return s.indexOf(String("\"type\":\"") + type_val + "\"") >= 0;
+    char search[64];
+    snprintf(search, sizeof(search), "\"type\":\"%s\"", type_val);
+    return strstr(str, search) != NULL;
+}
+
+static int parse_json_int(const char* str, const char* key, int default_val)
+{
+    char search[64];
+    int n = snprintf(search, sizeof(search), "\"%s\":", key);
+    if (n < 0 || n >= (int)sizeof(search)) return default_val;
+    const char* start = strstr(str, search);
+    if (!start) return default_val;
+    start += n;
+    while (*start == ' ' || *start == '\t') start++;
+    return atoi(start);
 }
 
 static const char* parse_status_state(const char* str)
@@ -75,6 +101,10 @@ static void free_audio_buffer(void)
 {
     if (audio_buffer) { free(audio_buffer); audio_buffer = NULL; }
     audio_size = 0;
+    audio_offset = 0;
+    audio_capacity = 0;
+    audio_streaming = false;
+    audio_is_pcm = false;
 }
 
 static void send_event(AppEvent evt)
@@ -86,7 +116,42 @@ static void onMessageCallback(WebsocketsMessage message)
 {
     if (message.isBinary()) {
         size_t len = message.length();
-        Serial.printf("WS BIN: %u bytes\n", (unsigned int)len);
+
+        if (audio_streaming) {
+            if (!audio_buffer) {
+                audio_capacity = len > 262144 ? len : 524288;
+                audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
+                if (!audio_buffer) {
+                    Serial.printf("WS: failed to alloc %u for streaming\n", (unsigned int)audio_capacity);
+                    return;
+                }
+                audio_offset = 0;
+            }
+            if (audio_offset + len > audio_capacity) {
+                size_t new_cap = audio_capacity + (1024 * 1024);
+                if (new_cap < audio_offset + len) new_cap = audio_offset + len;
+                uint8_t* new_buf = (uint8_t*)heap_caps_malloc(new_cap, MALLOC_CAP_SPIRAM);
+                if (new_buf) {
+                    memcpy(new_buf, audio_buffer, audio_offset);
+                    free(audio_buffer);
+                    audio_buffer = new_buf;
+                    audio_capacity = new_cap;
+                    Serial.printf("WS: audio buf grown to %u\n", (unsigned int)audio_capacity);
+                } else {
+                    Serial.printf("WS: audio buf grow FAILED need=%u cap=%u\n",
+                                   (unsigned int)new_cap, (unsigned int)audio_capacity);
+                }
+            }
+            if (audio_buffer && audio_offset + len <= audio_capacity) {
+                memcpy(audio_buffer + audio_offset, message.c_str(), len);
+                audio_offset += len;
+            }
+            if (audio_offset % (32 * 1024) < len || audio_offset == len) {
+                Serial.printf("WS BIN chunk: %u total=%u\n", (unsigned int)len, (unsigned int)audio_offset);
+            }
+            return;
+        }
+
         free_audio_buffer();
         audio_buffer = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
         if (audio_buffer) {
@@ -100,9 +165,37 @@ static void onMessageCallback(WebsocketsMessage message)
 
     const char* payload = message.c_str();
     size_t length = message.length();
-    Serial.printf("WS TEXT: %.*s\n", (int)length, payload);
+    Serial.printf("WS TEXT: %.*s%s\n", (int)(length > 200 ? 200 : length), payload, length > 200 ? "..." : "");
 
-    if (parse_json_has_type(payload, "audio_info")) {
+    if (parse_json_has_type(payload, "audio_start")) {
+        free_audio_buffer();
+        audio_streaming = true;
+        audio_is_pcm = true;
+        audio_offset = 0;
+        audio_sr = parse_json_int(payload, "sample_rate", 24000);
+        audio_ch = parse_json_int(payload, "channels", 1);
+        audio_bps = parse_json_int(payload, "bits", 16);
+        if (audio_ch < 1 || audio_ch > 2) audio_ch = 1;
+        audio_capacity = 5 * 1024 * 1024;
+        audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
+        if (!audio_buffer) {
+            audio_capacity = 3 * 1024 * 1024;
+            audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
+        }
+        if (!audio_buffer) {
+            audio_capacity = 1024 * 1024;
+            audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
+        }
+        if (audio_buffer) {
+            Serial.printf("WS: audio buf pre-alloc %u bytes\n", (unsigned int)audio_capacity);
+        }
+    } else if (parse_json_has_type(payload, "audio_end")) {
+        audio_streaming = false;
+        audio_size = audio_offset;
+        Serial.printf("WS: pcm streaming done %u bytes, %dHz %dch %dbps\n",
+                       (unsigned int)audio_size, audio_sr, audio_ch, audio_bps);
+    } else if (parse_json_has_type(payload, "audio_info")) {
+        Serial.flush();
     } else if (parse_json_has_type(payload, "status")) {
         const char* state = parse_status_state(payload);
         if (lvgl_lock(200)) {
@@ -116,8 +209,13 @@ static void onMessageCallback(WebsocketsMessage message)
             lvgl_unlock();
         }
     } else if (parse_json_has_type(payload, "token")) {
-        parse_json_string(payload, "content", agent_text + agent_text_len, sizeof(agent_text) - agent_text_len);
-        agent_text_len = strlen(agent_text);
+        if (agent_text_len < sizeof(agent_text) - 1) {
+            parse_json_string(payload, "content", agent_text + agent_text_len, sizeof(agent_text) - agent_text_len);
+            agent_text_len = strlen(agent_text);
+        }
+        if (agent_text_len >= sizeof(agent_text) - 4) {
+            Serial.printf("WS: agent_text near full (%u/%u)\n", (unsigned int)agent_text_len, (unsigned int)sizeof(agent_text));
+        }
     } else if (parse_json_has_type(payload, "text")) {
         parse_json_string(payload, "content", agent_text, sizeof(agent_text));
         agent_text_len = strlen(agent_text);
@@ -205,7 +303,7 @@ void ws_task(void *arg)
             if (client.connect(wsUrl.c_str())) {
             } else {
                 Serial.printf("WS: connect failed, retrying in 3s\n");
-                client.poll();
+        client.poll();
                 vTaskDelay(pdMS_TO_TICKS(3000));
                 continue;
             }
@@ -273,3 +371,7 @@ void ws_request_reconnect(void)
 uint8_t* ws_get_audio_buffer(void) { return audio_buffer; }
 size_t ws_get_audio_size(void) { return audio_size; }
 void ws_free_audio_buffer(void) { free_audio_buffer(); }
+bool ws_audio_is_pcm(void) { return audio_is_pcm; }
+int ws_audio_get_sample_rate(void) { return audio_sr; }
+int ws_audio_get_channels(void) { return audio_ch; }
+int ws_audio_get_bits(void) { return audio_bps; }
