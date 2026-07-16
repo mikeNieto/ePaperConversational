@@ -48,18 +48,13 @@
 #define EPD_TP_RST_PIN GPIO_NUM_7
 #define EPD_TP_INT_PIN GPIO_NUM_21
 
-/* WiFi */
-#define WIFI_SSID "MY_WIFI_SSID"
-#define WIFI_PASSWORD "MY_WIFI_PASSWORD"
-
-/* API */
-#define API_BASE_URL "MY_API_BASE_URL"
-
 /* Deep Sleep */
 #define INACTIVITY_TIMEOUT_MS 60000
 #define SLEEP_DURATION_SEC 3600
 
 /* WebSocket */
 #define WS_REQUEST_TIMEOUT_MS 600000
+
+#include "user_config_secrets.h"
 
 #endif
