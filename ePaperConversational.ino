@@ -1,17 +1,18 @@
 #include "user_app.h"
 #include "esp_sleep.h"
 #include "src/ui/status_bar.h"
+#include "esp_heap_caps.h"
 
 extern RTC_DATA_ATTR int boot_count;
 extern RTC_DATA_ATTR int sleep_counter;
-extern RTC_DATA_ATTR bool uuid_is_null;
 
 void setup()
 {
+    heap_caps_malloc_extmem_enable(256);
+
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 
     if (boot_count == 0) {
-        uuid_is_null = true;
         sleep_counter = 0;
         user_app_init();
         lvgl_port_init();

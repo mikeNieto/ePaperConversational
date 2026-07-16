@@ -22,13 +22,11 @@
 #include "src/battery/battery_bsp.h"
 #include "audio_bsp.h"
 #include "src/codec_board/codec_init.h"
-#include "api_client.h"
+#include "ws_client.h"
 #include "messages.h"
 
 RTC_DATA_ATTR int boot_count = 0;
 RTC_DATA_ATTR int sleep_counter = 0;
-RTC_DATA_ATTR char conversation_uuid[37] = {0};
-RTC_DATA_ATTR bool uuid_is_null = true;
 
 static const char *TAG = "user_app";
 
@@ -39,51 +37,14 @@ EventGroupHandle_t touch_event_group = NULL;
 static QueueHandle_t gpio_evt_queue = NULL;
 TaskHandle_t sleep_timer_handle = NULL;
 
-AppState g_app_state = STATE_ACTIVE;
-lv_obj_t* g_btn_continuar = NULL;
-lv_obj_t* g_btn_nueva = NULL;
-lv_obj_t* g_lbl_continuar = NULL;
-lv_obj_t* g_lbl_nueva = NULL;
-int g_selected_option = 0;
-char g_transcribed_text[512] = {0};
+AppState g_app_state = STATE_CONNECTING;
 char g_agent_text[1024] = {0};
-char g_audio_url[256] = {0};
-uint8_t* g_mp3_buffer = NULL;
-size_t g_mp3_size = 0;
 
 static lv_coord_t last_touch_x = 0;
 static lv_coord_t last_touch_y = 0;
 static bool last_touch_pressed = false;
 
 QueueHandle_t state_queue = NULL;
-
-void generate_uuid(char* buf, size_t len)
-{
-    snprintf(buf, len, "%08x-%04x-%04x-%04x-%04x%08x",
-        esp_random(), esp_random() & 0xFFFF,
-        (esp_random() & 0x0FFF) | 0x4000,
-        (esp_random() & 0x3FFF) | 0x8000,
-        esp_random() & 0xFFFF, esp_random());
-}
-
-void highlight_selection(void)
-{
-    if (uuid_is_null) return;
-    if (g_btn_continuar && g_lbl_continuar) {
-        bool sel = (g_selected_option == 0);
-        lv_obj_set_style_bg_color(g_btn_continuar, sel ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
-        lv_obj_set_style_text_color(g_lbl_continuar, sel ? lv_color_white() : lv_color_black(), LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(g_btn_continuar, lv_color_black(), LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(g_btn_continuar, sel ? 0 : 1, LV_STATE_DEFAULT);
-    }
-    if (g_btn_nueva && g_lbl_nueva) {
-        bool sel = (g_selected_option == 1);
-        lv_obj_set_style_bg_color(g_btn_nueva, sel ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
-        lv_obj_set_style_text_color(g_lbl_nueva, sel ? lv_color_white() : lv_color_black(), LV_STATE_DEFAULT);
-        lv_obj_set_style_border_color(g_btn_nueva, lv_color_black(), LV_STATE_DEFAULT);
-        lv_obj_set_style_border_width(g_btn_nueva, sel ? 0 : 1, LV_STATE_DEFAULT);
-    }
-}
 
 static void show_error_message(const char* msg, int duration_ms)
 {
@@ -100,87 +61,23 @@ static void show_error_message(const char* msg, int duration_ms)
     vTaskDelay(pdMS_TO_TICKS(duration_ms));
 }
 
-static void transcription_task(void *arg)
-{
-    uint8_t* wav = audio_get_wav_buffer();
-    uint32_t size = audio_get_wav_size();
-    char text[512] = {0};
-    AppEvent evt;
-
-    if (wav && size > 44 && api_transcribe_audio(wav, size, text, sizeof(text))) {
-        strncpy(g_transcribed_text, text, sizeof(g_transcribed_text) - 1);
-        Serial.printf("Transcribed: %s\n", g_transcribed_text);
-        evt.type = EVT_TRANSCRIBE_OK;
-    } else {
-        Serial.printf("Transcription failed\n");
-        evt.type = EVT_TRANSCRIBE_FAIL;
-    }
-    evt.data = 0;
-    xQueueSend(state_queue, &evt, 0);
-    vTaskDelete(NULL);
-}
-
-static void chat_task(void *arg)
-{
-    AppEvent evt;
-    if (api_send_message(conversation_uuid, g_transcribed_text,
-                          g_agent_text, sizeof(g_agent_text),
-                          g_audio_url, sizeof(g_audio_url))) {
-        Serial.printf("Agent: %s\n", g_agent_text);
-        Serial.printf("Audio URL: %s\n", g_audio_url);
-        if (g_audio_url[0] && api_download_audio(g_audio_url, &g_mp3_buffer, &g_mp3_size)) {
-            Serial.printf("MP3 downloaded: %u bytes\n", g_mp3_size);
-            evt.type = EVT_CHAT_OK;
-        } else {
-            Serial.printf("MP3 download failed\n");
-            evt.type = EVT_DOWNLOAD_FAIL;
-        }
-    } else {
-        evt.type = EVT_CHAT_FAIL;
-    }
-    evt.data = 0;
-    xQueueSend(state_queue, &evt, 0);
-    vTaskDelete(NULL);
-}
-
-static void on_screen1_activate(int option)
-{
-    if (uuid_is_null || option == 1) {
-        generate_uuid(conversation_uuid, sizeof(conversation_uuid));
-        uuid_is_null = false;
-        Serial.printf("New UUID: %s\n", conversation_uuid);
-    }
-    switch_state(STATE_RECORD);
-}
-
 void switch_state(AppState new_state)
 {
     if (!lvgl_lock(2000)) return;
 
-    g_btn_continuar = NULL;
-    g_btn_nueva = NULL;
-    g_lbl_continuar = NULL;
-    g_lbl_nueva = NULL;
-
     lv_obj_t* old_scr = lv_scr_act();
     lv_obj_t* new_scr = NULL;
 
-    if (new_state == STATE_RECORD) {
+    if (new_state == STATE_CONNECTING) {
+        new_scr = create_screen_connecting();
+    } else if (new_state == STATE_RECORD) {
         new_scr = create_screen_2_record();
     } else if (new_state == STATE_LISTENING) {
         audio_play_init();
         audio_start_recording();
         new_scr = create_screen_2b_listening();
-    } else if (new_state == STATE_ACTIVE) {
-        new_scr = create_screen_1_active(hasTouch, uuid_is_null);
-    } else if (new_state == STATE_DISCARDED) {
-        new_scr = create_screen_3b_discarded();
-    } else if (new_state == STATE_SENDING) {
-        new_scr = create_screen_3_sending();
-    } else if (new_state == STATE_CONFIRM) {
-        new_scr = create_screen_4_confirm(g_transcribed_text, hasTouch);
-    } else if (new_state == STATE_WAITING) {
-        new_scr = create_screen_5_waiting();
+    } else if (new_state == STATE_RECEIVING) {
+        new_scr = create_screen_receiving();
     } else if (new_state == STATE_RESPONSE) {
         new_scr = create_screen_6_response(g_agent_text);
     }
@@ -196,16 +93,11 @@ void switch_state(AppState new_state)
     g_app_state = new_state;
     lvgl_unlock();
 
-    if (new_state == STATE_DISCARDED) {
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        switch_state(STATE_RECORD);
-    } else if (new_state == STATE_SENDING) {
-        xTaskCreatePinnedToCore(transcription_task, "stt_task", 8 * 1024, NULL, 3, NULL, 1);
-    } else if (new_state == STATE_WAITING) {
-        xTaskCreatePinnedToCore(chat_task, "chat_task", 8 * 1024, NULL, 3, NULL, 1);
-    } else if (new_state == STATE_RESPONSE) {
-        if (g_mp3_buffer && g_mp3_size > 0) {
-            audio_play_mp3_start(g_mp3_buffer, g_mp3_size);
+    if (new_state == STATE_RESPONSE) {
+        uint8_t* wav_buf = ws_get_audio_buffer();
+        size_t wav_sz = ws_get_audio_size();
+        if (wav_buf && wav_sz > 0) {
+            audio_play_wav_start(wav_buf, wav_sz);
         }
     }
 
@@ -217,67 +109,66 @@ static void state_task(void *arg)
     AppEvent evt;
     for (;;) {
         if (xQueueReceive(state_queue, &evt, pdMS_TO_TICKS(200)) == pdTRUE) {
-            if (g_app_state == STATE_ACTIVE) {
-                if (evt.type == EVT_TOGGLE_SELECTION && !uuid_is_null) {
-                    if (lvgl_lock(200)) {
-                        g_selected_option = !g_selected_option;
-                        highlight_selection();
-                        lvgl_unlock();
-                    }
-                } else if (evt.type == EVT_ACTIVATE_OPTION) {
-                    int opt = uuid_is_null ? 1 : g_selected_option;
-                    on_screen1_activate(opt);
-                } else if (evt.type == EVT_TOUCH_OPTION) {
-                    on_screen1_activate(evt.data);
-                }
-            } else if (g_app_state == STATE_RECORD) {
-                if (evt.type == EVT_ACTIVATE_OPTION) {
-                    switch_state(STATE_LISTENING);
-                }
-            } else if (g_app_state == STATE_LISTENING) {
-                if (evt.type == EVT_ACTIVATE_OPTION) {
-                    audio_stop_recording();
-                    switch_state(STATE_SENDING);
-                } else if (evt.type == EVT_RECORDING_DONE) {
-                    Serial.printf("Recording auto-stopped (timeout)\n");
-                    audio_discard_recording();
-                    switch_state(STATE_DISCARDED);
-                }
-            } else if (g_app_state == STATE_SENDING) {
-                if (evt.type == EVT_TRANSCRIBE_OK) {
-                    switch_state(STATE_CONFIRM);
-                } else if (evt.type == EVT_TRANSCRIBE_FAIL) {
-                    show_error_message(currentLang->error_transcribir, 2000);
+            if (g_app_state == STATE_CONNECTING) {
+                if (evt.type == EVT_WS_CONNECTED) {
                     switch_state(STATE_RECORD);
                 }
-            } else if (g_app_state == STATE_CONFIRM) {
-                if (evt.type == EVT_TOGGLE_SELECTION) {
-                    if (lvgl_lock(200)) {
-                        g_selected_option = !g_selected_option;
-                        highlight_selection();
-                        lvgl_unlock();
-                    }
-                } else if (evt.type == EVT_ACTIVATE_OPTION || evt.type == EVT_TOUCH_OPTION) {
-                    if (evt.data == 0) {
-                        switch_state(STATE_WAITING);
+            } else if (g_app_state == STATE_RECORD) {
+                if (evt.type == EVT_START_RECORDING) {
+                    switch_state(STATE_LISTENING);
+                } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    switch_state(STATE_CONNECTING);
+                }
+            } else if (g_app_state == STATE_LISTENING) {
+                if (evt.type == EVT_STOP_RECORDING) {
+                    audio_stop_recording();
+                    uint8_t* wav = audio_get_wav_buffer();
+                    uint32_t size = audio_get_wav_size();
+                    if (wav && size > 44) {
+                        ws_send_audio(wav, size);
+                        switch_state(STATE_RECEIVING);
                     } else {
                         switch_state(STATE_RECORD);
                     }
+                } else if (evt.type == EVT_RECORDING_DONE) {
+                    uint8_t* wav = audio_get_wav_buffer();
+                    uint32_t size = audio_get_wav_size();
+                    if (wav && size > 44) {
+                        ws_send_audio(wav, size);
+                        switch_state(STATE_RECEIVING);
+                    } else {
+                        switch_state(STATE_RECORD);
+                    }
+                } else if (evt.type == EVT_DISCARD) {
+                    audio_discard_recording();
+                    switch_state(STATE_RECORD);
+                } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    audio_discard_recording();
+                    switch_state(STATE_CONNECTING);
                 }
-            } else if (g_app_state == STATE_WAITING) {
-                if (evt.type == EVT_CHAT_OK) {
+            } else if (g_app_state == STATE_RECEIVING) {
+                if (evt.type == EVT_RESPONSE_READY) {
                     switch_state(STATE_RESPONSE);
-                } else if (evt.type == EVT_CHAT_FAIL) {
-                    show_error_message(currentLang->error_servidor, 2000);
+                } else if (evt.type == EVT_WS_ERROR) {
+                    show_error_message(currentLang->error_conexion, 2000);
                     switch_state(STATE_RECORD);
-                } else if (evt.type == EVT_DOWNLOAD_FAIL) {
-                    show_error_message("Error al descargar audio", 2000);
-                    switch_state(STATE_RECORD);
+                } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    switch_state(STATE_CONNECTING);
                 }
             } else if (g_app_state == STATE_RESPONSE) {
-                if (!audio_mp3_is_playing()) {
-                    if (g_mp3_buffer) { free(g_mp3_buffer); g_mp3_buffer = NULL; g_mp3_size = 0; }
-                    switch_state(STATE_RECORD);
+                if (evt.type == EVT_NEXT_MESSAGE) {
+                    audio_play_wav_stop();
+                    ws_free_audio_buffer();
+                    switch_state(STATE_LISTENING);
+                } else if (evt.type == EVT_WS_RECONNECT) {
+                    audio_play_wav_stop();
+                    ws_free_audio_buffer();
+                    ws_request_reconnect();
+                    switch_state(STATE_CONNECTING);
+                } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    audio_play_wav_stop();
+                    ws_free_audio_buffer();
+                    switch_state(STATE_CONNECTING);
                 }
             }
         }
@@ -401,10 +292,10 @@ void lvgl_port_init(void)
 
 void user_ui_init(void)
 {
-    lv_obj_t* screen1 = create_screen_1_active(hasTouch, uuid_is_null);
-    lv_scr_load(screen1);
+    lv_obj_t* screen = create_screen_connecting();
+    lv_scr_load(screen);
     lv_timer_handler();
-    Serial.printf("Screen 1 loaded. Sleep timer active (%ds).\n", INACTIVITY_TIMEOUT_MS / 1000);
+    Serial.printf("Connecting screen loaded. Waiting for WebSocket...\n");
 }
 
 void button_task(void *arg)
@@ -415,52 +306,42 @@ void button_task(void *arg)
 
         if (boot_ev || pwr_ev) activity_feed();
 
-        if (g_app_state == STATE_ACTIVE) {
-            if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) {
-                AppEvent evt = { EVT_TOGGLE_SELECTION, 0 };
-                xQueueSend(state_queue, &evt, 0);
-            }
-            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
-                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
-                xQueueSend(state_queue, &evt, 0);
-            }
+        if (g_app_state == STATE_CONNECTING) {
         } else if (g_app_state == STATE_RECORD) {
             if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
-                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                AppEvent evt = { EVT_START_RECORDING, 0 };
                 xQueueSend(state_queue, &evt, 0);
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
-                switch_state(STATE_ACTIVE);
+                Serial.printf("PWR in RECORD: entering deep sleep\n");
+                if (lvgl_lock(1000)) {
+                    status_bar_set_visible(false);
+                    lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
+                    lv_scr_load(s0);
+                    lv_timer_handler();
+                    lvgl_unlock();
+                }
+                vTaskDelay(pdMS_TO_TICKS(500));
+                enter_deep_sleep();
             }
         } else if (g_app_state == STATE_LISTENING) {
             if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
-                AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                AppEvent evt = { EVT_STOP_RECORDING, 0 };
                 xQueueSend(state_queue, &evt, 0);
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
-                audio_discard_recording();
-                switch_state(STATE_DISCARDED);
-            }
-        } else if (g_app_state == STATE_CONFIRM) {
-            if (BTN_GET(boot_ev, BOOT_BIT_DOUBLE)) {
-                AppEvent evt = { EVT_TOGGLE_SELECTION, 0 };
+                AppEvent evt = { EVT_DISCARD, 0 };
                 xQueueSend(state_queue, &evt, 0);
             }
-            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
-                AppEvent evt = { EVT_ACTIVATE_OPTION, (uint8_t)g_selected_option };
-                xQueueSend(state_queue, &evt, 0);
-            }
-            if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
-                switch_state(STATE_RECORD);
-            }
+        } else if (g_app_state == STATE_RECEIVING) {
         } else if (g_app_state == STATE_RESPONSE) {
             if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
-                audio_play_mp3_replay();
+                AppEvent evt = { EVT_NEXT_MESSAGE, 0 };
+                xQueueSend(state_queue, &evt, 0);
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
-                audio_play_mp3_stop();
-                if (g_mp3_buffer) { free(g_mp3_buffer); g_mp3_buffer = NULL; g_mp3_size = 0; }
-                switch_state(STATE_RECORD);
+                AppEvent evt = { EVT_WS_RECONNECT, 0 };
+                xQueueSend(state_queue, &evt, 0);
             }
         }
 
@@ -543,19 +424,12 @@ void touch_task(void *arg)
                 Serial.flush();
                 activity_feed();
 
-                if (g_app_state == STATE_ACTIVE) {
-                    // LVGL buttons handle clicks via on_btn_* callbacks
-                } else if (g_app_state == STATE_RECORD) {
-                    AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                if (g_app_state == STATE_RECORD) {
+                    AppEvent evt = { EVT_START_RECORDING, 0 };
                     xQueueSend(state_queue, &evt, 0);
                 } else if (g_app_state == STATE_LISTENING) {
-                    AppEvent evt = { EVT_ACTIVATE_OPTION, 0 };
+                    AppEvent evt = { EVT_STOP_RECORDING, 0 };
                     xQueueSend(state_queue, &evt, 0);
-                } else if (g_app_state == STATE_CONFIRM) {
-                    // LVGL buttons handle clicks via on_btn_* callbacks
-                } else if (g_app_state == STATE_RESPONSE) {
-                    audio_play_mp3_replay();
-                    activity_feed();
                 }
             } else {
                 last_touch_pressed = false;
@@ -628,9 +502,8 @@ void deep_sleep_timer_task(void *arg)
     for (;;) {
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(INACTIVITY_TIMEOUT_MS)) == 0) {
             if (g_app_state == STATE_LISTENING ||
-                g_app_state == STATE_SENDING ||
-                g_app_state == STATE_WAITING ||
-                g_app_state == STATE_RESPONSE) {
+                g_app_state == STATE_RECEIVING ||
+                (g_app_state == STATE_RESPONSE && audio_wav_is_playing())) {
                 continue;
             }
             Serial.printf("Inactivity timeout, sleeping...\n");
@@ -741,6 +614,9 @@ void user_app_init(void)
     activity_feed();
 
     audio_bsp_init();
+
+    ws_init();
+    xTaskCreatePinnedToCore(ws_task, "ws_task", 12 * 1024, NULL, 3, NULL, 1);
 
     Serial.printf("Boot count: %d  Sleep counter: %d\n", boot_count, sleep_counter);
     Serial.flush();

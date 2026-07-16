@@ -21,39 +21,29 @@ typedef struct {
     uint8_t data;
 } AppEvent;
 
-#define EVT_TOGGLE_SELECTION  1
-#define EVT_ACTIVATE_OPTION   2
-#define EVT_TOUCH_OPTION      3
-#define EVT_RECORDING_DONE    4
-#define EVT_TRANSCRIBE_OK     5
-#define EVT_TRANSCRIBE_FAIL   6
-#define EVT_CHAT_OK            7
-#define EVT_CHAT_FAIL          8
-#define EVT_MP3_DONE           9
-#define EVT_DOWNLOAD_FAIL     10
+#define EVT_WS_CONNECTED      1
+#define EVT_WS_DISCONNECTED   2
+#define EVT_WS_ERROR          3
+#define EVT_START_RECORDING   4
+#define EVT_STOP_RECORDING    5
+#define EVT_RECORDING_DONE    6
+#define EVT_RESPONSE_READY    7
+#define EVT_NEXT_MESSAGE      8
+#define EVT_WS_RECONNECT      9
+#define EVT_DISCARD           10
 
 typedef enum {
-    STATE_DEEP_SLEEP = 0,
-    STATE_ACTIVE = 1,
-    STATE_RECORD = 2,
-    STATE_LISTENING = 3,
-    STATE_SENDING = 4,
-    STATE_CONFIRM = 5,
-    STATE_WAITING = 6,
-    STATE_RESPONSE = 7,
-    STATE_DISCARDED = 8
+    STATE_CONNECTING = 0,
+    STATE_RECORD = 1,
+    STATE_LISTENING = 2,
+    STATE_RECEIVING = 3,
+    STATE_RESPONSE = 4
 } AppState;
 
 extern AppState g_app_state;
-extern lv_obj_t* g_btn_continuar;
-extern lv_obj_t* g_btn_nueva;
-extern lv_obj_t* g_lbl_continuar;
-extern lv_obj_t* g_lbl_nueva;
-extern int g_selected_option;
+extern char g_agent_text[1024];
 
-void generate_uuid(char* buf, size_t len);
 void switch_state(AppState new_state);
-void highlight_selection(void);
 
 #ifdef __cplusplus
 extern "C" {

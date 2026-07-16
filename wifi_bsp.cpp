@@ -6,7 +6,6 @@
 #include "user_config.h"
 #include "user_app.h"
 #include "src/ui/status_bar.h"
-#include "api_client.h"
 
 static const char *TAG_WIFI = "wifi";
 static bool led_state = false;
@@ -27,6 +26,11 @@ static void led_init(void)
 static void led_set(bool on)
 {
     gpio_set_level(LED_PIN, on ? 1 : 0);
+}
+
+void wifi_led_write(bool on)
+{
+    led_set(on);
 }
 
 EventGroupHandle_t wifi_event_group = NULL;
@@ -53,14 +57,11 @@ void wifi_task(void *arg)
 {
     for (;;) {
         if (WiFi.status() == WL_CONNECTED) {
-            led_set(false);
             EventBits_t bits = xEventGroupGetBits(wifi_event_group);
             if (!(bits & WIFI_BIT_CONNECTED)) {
                 xEventGroupSetBits(wifi_event_group, WIFI_BIT_CONNECTED);
                 xEventGroupClearBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
-                Serial.printf("WiFi reconnected. IP: %s\n", WiFi.localIP().toString().c_str());
-                bool api_ok = api_health_check();
-                Serial.printf("API health: %s\n", api_ok ? "OK" : "FAIL");
+                Serial.printf("WiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
             }
         } else {
             led_state = !led_state;

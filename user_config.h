@@ -54,10 +54,12 @@
 
 /* API */
 #define API_BASE_URL "MY_API_BASE_URL"
-#define USER_ID "esp32-user-01"
 
 /* Deep Sleep */
 #define INACTIVITY_TIMEOUT_MS 60000
 #define SLEEP_DURATION_SEC 3600
+
+/* WebSocket */
+#define WS_REQUEST_TIMEOUT_MS 600000
 
 #endif

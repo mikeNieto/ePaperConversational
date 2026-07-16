@@ -212,114 +212,133 @@ uint32_t audio_get_wav_size(void)
     return 44 + rec_bytes_written;
 }
 
-/* ---------- MP3 playback ---------- */
-#define MINIMP3_IMPLEMENTATION
-#include "minimp3.h"
+/* ---------- WAV playback ---------- */
 
-static uint8_t* mp3_buffer = NULL;
-static size_t mp3_size = 0;
-static volatile bool mp3_playing = false;
-static volatile bool mp3_stop_flag = false;
-static volatile bool mp3_replay_flag = false;
-static TaskHandle_t mp3_task_handle = NULL;
+static uint8_t* wav_buffer = NULL;
+static size_t wav_size = 0;
+static volatile bool wav_playing = false;
+static volatile bool wav_stop_flag = false;
+static volatile bool wav_replay_flag = false;
+static TaskHandle_t wav_task_handle = NULL;
 
-static void mp3_playback_task(void *arg)
+static bool parse_wav_header(uint8_t* buf, size_t size, int* sr, int* ch, int* bps, uint32_t* data_offset, uint32_t* data_size)
+{
+    if (size < 44) return false;
+    if (memcmp(buf, "RIFF", 4) != 0) return false;
+    if (memcmp(buf + 8, "WAVE", 4) != 0) return false;
+    if (memcmp(buf + 12, "fmt ", 4) != 0) return false;
+
+    int fmt_chunk_size = buf[16] | (buf[17] << 8) | (buf[18] << 16) | (buf[19] << 24);
+    int audio_format = buf[20] | (buf[21] << 8);
+    if (audio_format != 1) return false;
+
+    *ch = buf[22] | (buf[23] << 8);
+    if (*ch < 1 || *ch > 2) *ch = 2;
+    *sr = buf[24] | (buf[25] << 8) | (buf[26] << 16) | (buf[27] << 24);
+    *bps = buf[34] | (buf[35] << 8);
+
+    size_t offset = 20 + fmt_chunk_size;
+    while (offset + 8 <= size) {
+        if (memcmp(buf + offset, "data", 4) == 0) {
+            *data_offset = offset + 8;
+            *data_size = buf[offset + 4] | (buf[offset + 5] << 8) | (buf[offset + 6] << 16) | (buf[offset + 7] << 24);
+            if (*data_offset + *data_size > size) {
+                *data_size = size - *data_offset;
+            }
+            return true;
+        }
+        uint32_t chunk_size = buf[offset + 4] | (buf[offset + 5] << 8) | (buf[offset + 6] << 16) | (buf[offset + 7] << 24);
+        offset += 8 + chunk_size;
+    }
+
+    *data_offset = 44;
+    *data_size = size - 44;
+    return true;
+}
+
+static void wav_playback_task(void *arg)
 {
     esp_codec_dev_close(playback);
     esp_codec_dev_close(record);
     codec_opened = false;
     vTaskDelay(pdMS_TO_TICKS(50));
 
-    mp3d_sample_t* pcm = (mp3d_sample_t*)malloc(sizeof(mp3d_sample_t) * MINIMP3_MAX_SAMPLES_PER_FRAME);
-    if (!pcm) { mp3_playing = false; mp3_task_handle = NULL; vTaskDelete(NULL); return; }
-
-    int sr = 44100;
-    int ch = 2;
-    {
-        mp3dec_t d;
-        mp3dec_frame_info_t inf;
-        mp3dec_init(&d);
-        if (mp3dec_decode_frame(&d, mp3_buffer, (int)mp3_size, pcm, &inf) > 0 && inf.hz > 0) {
-            sr = inf.hz;
-            ch = inf.channels > 0 ? inf.channels : 2;
-        }
+    int sr, ch, bps;
+    uint32_t data_offset, data_size;
+    if (!parse_wav_header(wav_buffer, wav_size, &sr, &ch, &bps, &data_offset, &data_size)) {
+        Serial.printf("WAV: invalid header\n");
+        wav_playing = false;
+        wav_task_handle = NULL;
+        vTaskDelete(NULL);
+        return;
     }
+
+    Serial.printf("WAV playback: %d Hz, %d ch, %d bps, %u bytes PCM\n", sr, ch, bps, data_size);
 
     esp_codec_dev_sample_info_t fs = {};
     fs.sample_rate = sr;
     fs.channel = ch;
-    fs.bits_per_sample = 16;
+    fs.bits_per_sample = bps;
     esp_codec_dev_set_out_vol(playback, 100.0);
     esp_codec_dev_open(playback, &fs);
     codec_opened = true;
-    Serial.printf("MP3 playback: %d Hz, %d ch\n", sr, ch);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    mp3dec_t dec;
-    mp3dec_init(&dec);
-    mp3dec_frame_info_t info;
-    uint8_t* ptr = mp3_buffer;
-    int remaining = (int)mp3_size;
+    uint8_t* pcm = wav_buffer + data_offset;
+    uint32_t remaining = data_size;
+    uint8_t* ptr = pcm;
+    uint32_t pos = 0;
 
-    while (remaining > 0 && !mp3_stop_flag) {
-        if (mp3_replay_flag) {
-            mp3_replay_flag = false;
-            mp3dec_init(&dec);
-            ptr = mp3_buffer;
-            remaining = (int)mp3_size;
+    while (remaining > 0 && !wav_stop_flag) {
+        if (wav_replay_flag) {
+            wav_replay_flag = false;
+            ptr = pcm;
+            pos = 0;
+            remaining = data_size;
         }
-        int samples = mp3dec_decode_frame(&dec, ptr, remaining, pcm, &info);
-        if (samples <= 0) break;
-        ptr += info.frame_bytes;
-        remaining -= info.frame_bytes;
-
-        int total_bytes = samples * info.channels * 2;
-        uint8_t* pcm_bytes = (uint8_t*)pcm;
-        while (total_bytes > 0 && !mp3_stop_flag) {
-            int chunk = total_bytes > 256 ? 256 : total_bytes;
-            esp_codec_dev_write(playback, pcm_bytes, chunk);
-            pcm_bytes += chunk;
-            total_bytes -= chunk;
-            vTaskDelay(pdMS_TO_TICKS(1));
-        }
+        uint32_t chunk = remaining > 256 ? 256 : remaining;
+        esp_codec_dev_write(playback, ptr + pos, chunk);
+        pos += chunk;
+        remaining -= chunk;
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     esp_codec_dev_close(playback);
     codec_opened = false;
-    mp3_playing = false;
-    mp3_task_handle = NULL;
-    free(pcm);
-    Serial.printf("MP3 playback finished\n");
+    wav_playing = false;
+    wav_task_handle = NULL;
+    activity_feed();
+    Serial.printf("WAV playback finished\n");
     vTaskDelete(NULL);
 }
 
-void audio_play_mp3_start(uint8_t* buf, size_t size)
+void audio_play_wav_start(uint8_t* buf, size_t size)
 {
-    if (mp3_playing) {
-        mp3_stop_flag = true;
-        while (mp3_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    if (wav_playing) {
+        wav_stop_flag = true;
+        while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
     }
-    mp3_buffer = buf;
-    mp3_size = size;
-    mp3_stop_flag = false;
-    mp3_replay_flag = false;
-    mp3_playing = true;
-    xTaskCreatePinnedToCore(mp3_playback_task, "mp3_task", 40 * 1024, NULL, 5, &mp3_task_handle, 1);
+    wav_buffer = buf;
+    wav_size = size;
+    wav_stop_flag = false;
+    wav_replay_flag = false;
+    wav_playing = true;
+    xTaskCreatePinnedToCore(wav_playback_task, "wav_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
 }
 
-void audio_play_mp3_stop(void)
+void audio_play_wav_stop(void)
 {
-    mp3_stop_flag = true;
-    while (mp3_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
-    mp3_playing = false;
+    wav_stop_flag = true;
+    while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    wav_playing = false;
 }
 
-void audio_play_mp3_replay(void)
+void audio_play_wav_replay(void)
 {
-    if (mp3_playing) mp3_replay_flag = true;
+    if (wav_playing) wav_replay_flag = true;
 }
 
-bool audio_mp3_is_playing(void)
+bool audio_wav_is_playing(void)
 {
-    return mp3_playing;
+    return wav_playing;
 }
