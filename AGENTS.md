@@ -12,6 +12,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - No CI, no lint, no typecheck, no tests
 - Only verification: compile with Arduino IDE and flash to hardware
 - **PSRAM must be enabled**: `heap_caps_malloc_extmem_enable(256)` called first in `setup()`
+- **Secrets setup**: `cp user_config_secrets.example.h user_config_secrets.h` then edit with real WiFi/api credentials
 
 ## Architecture
 
@@ -64,9 +65,15 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - All display strings use `currentLang->` (i18n struct `LangMessages`, only `MSG_ES` implemented)
 - `lvgl_lock()` returns `bool` — check the return value; if false, don't proceed with widget operations
 
-## Secrets warning
+## Config and secrets
 
-`user_config.h` contains hardcoded WiFi credentials, API base URL, and user ID. Never commit changes that expose real credentials.
+Configuration is split into two files:
+
+- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings. **When adding new config constants, add them here.**
+- **`user_config_secrets.h`** — gitignored (not tracked). Contains ONLY the 3 secret defines: `WIFI_SSID`, `WIFI_PASSWORD`, `API_BASE_URL`. `user_config.h` includes this file at the end.
+- **`user_config_secrets.example.h`** — tracked template with dummy values. New clones: `cp user_config_secrets.example.h user_config_secrets.h` and edit with real values.
+
+**Rule**: if a new constant is NOT a secret (no passwords, keys, personal IPs/URLs), put it in `user_config.h` only. If it IS a secret, add it to BOTH `user_config_secrets.h` and `user_config_secrets.example.h` (with a dummy in the example).
 
 ## Directory map
 
