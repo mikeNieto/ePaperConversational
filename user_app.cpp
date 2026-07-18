@@ -137,14 +137,8 @@ static void state_task(void *arg)
                         switch_state(STATE_RECORD);
                     }
                 } else if (evt.type == EVT_RECORDING_DONE) {
-                    uint8_t* wav = audio_get_wav_buffer();
-                    uint32_t size = audio_get_wav_size();
-                    if (wav && size > 44) {
-                        ws_send_audio(wav, size);
-                        switch_state(STATE_RECEIVING);
-                    } else {
-                        switch_state(STATE_RECORD);
-                    }
+                    audio_discard_recording();
+                    switch_state(STATE_RECORD);
                 } else if (evt.type == EVT_DISCARD) {
                     audio_discard_recording();
                     switch_state(STATE_RECORD);
