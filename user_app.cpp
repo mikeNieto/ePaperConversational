@@ -180,11 +180,16 @@ static void state_task(void *arg)
                     ws_request_reconnect();
                     switch_state(STATE_CONNECTING);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
-                    audio_play_wav_stop();
-                    ws_free_audio_buffer();
-                    switch_state(STATE_CONNECTING);
+                    if (!audio_wav_is_playing()) {
+                        ws_free_audio_buffer();
+                        switch_state(STATE_CONNECTING);
+                    }
                 }
             }
+        }
+        if (g_app_state == STATE_RESPONSE && !audio_wav_is_playing() && !ws_is_connected()) {
+            ws_free_audio_buffer();
+            switch_state(STATE_CONNECTING);
         }
     }
 }
