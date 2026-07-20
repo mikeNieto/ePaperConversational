@@ -204,7 +204,11 @@ static void onMessageCallback(WebsocketsMessage message)
             } else if (strcmp(state, "thinking") == 0) {
                 update_screen_receiving_status(currentLang->pensando);
             } else if (strcmp(state, "speaking") == 0) {
-                update_screen_receiving_status(currentLang->hablando);
+                if (agent_text_len > 0) {
+                    update_screen_receiving_status(agent_text);
+                } else {
+                    update_screen_receiving_status(currentLang->hablando);
+                }
             }
             lvgl_unlock();
         }
@@ -216,9 +220,17 @@ static void onMessageCallback(WebsocketsMessage message)
         if (agent_text_len >= sizeof(agent_text) - 4) {
             Serial.printf("WS: agent_text near full (%u/%u)\n", (unsigned int)agent_text_len, (unsigned int)sizeof(agent_text));
         }
+        if (g_app_state == STATE_RECEIVING && lvgl_lock(200)) {
+            update_screen_receiving_status(agent_text);
+            lvgl_unlock();
+        }
     } else if (parse_json_has_type(payload, "text")) {
         parse_json_string(payload, "content", agent_text, sizeof(agent_text));
         agent_text_len = strlen(agent_text);
+        if (g_app_state == STATE_RECEIVING && lvgl_lock(200)) {
+            update_screen_receiving_status(agent_text);
+            lvgl_unlock();
+        }
     } else if (parse_json_has_type(payload, "done")) {
         waiting_response = false;
         memcpy(g_agent_text, agent_text, sizeof(g_agent_text));
