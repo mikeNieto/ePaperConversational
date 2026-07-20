@@ -66,14 +66,22 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
 - **Beep notification sounds**: short audio chirps played to indicate state transitions:
   - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
-  - `AUDIO_BEEP_STOP` (500 Hz): plays after recording stops, before sending audio to WebSocket. 150ms total (70ms silence + 80ms tone) at 24000Hz mono 16-bit.
-  - Both use `audio_beep_play_standalone()` (`audio_bsp.cpp`) which generates a WAV in heap and plays it via `audio_play_wav_start()` → `wav_playback_task`. This is the **same codec path as the response audio**, ensuring reliable I2S TX DMA initialization.
+  - `AUDIO_BEEP_STOP` (500 Hz): plays after recording stops, before sending audio to WebSocket. 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
+  - `AUDIO_BEEP_DISCARD` (300 Hz): plays when recording is discarded via PWR button (`EVT_DISCARD`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
+  - `AUDIO_BEEP_RECONNECT` (1000 Hz): plays when PWR is pressed during `STATE_RESPONSE` to reconnect WebSocket (`EVT_WS_RECONNECT`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
+  - `AUDIO_BEEP_SLEEP` (900→600 Hz descending two-tone): plays when entering deep sleep (`enter_deep_sleep()`). 250ms total (50ms silence + 100ms@900Hz + 100ms@600Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
+  - `AUDIO_BEEP_WAKE` (600→900 Hz ascending two-tone): plays on wake from deep sleep via button (`ESP_SLEEP_WAKEUP_EXT1`) or other non-timer wake. 250ms total (50ms silence + 100ms@600Hz + 100ms@900Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000). Similar to Windows device connect/disconnect sounds.
+  - All use `audio_beep_play_standalone()` (`audio_bsp.cpp`) which generates a WAV in heap and plays it via `audio_play_wav_start()` → `wav_playback_task`. This is the **same codec path as the response audio**, ensuring reliable I2S TX DMA initialization.
   - **Silence padding is critical**: the I2S TX DMA needs ~50-70ms of priming data before audio becomes audible. Without leading silence, short beeps (<200ms) are completely inaudible because the DMA never starts transmitting before the codec is closed.
   - `audio_beep_play()` (`audio_bsp.cpp`): alternative direct-write variant (writes PCM via `esp_codec_dev_write()` to an already-open codec). Only works when codec is freshly opened — **do not use after close/reopen cycles** as the ES8311 DAC path may not re-enable.
   - Beep integration points in `user_app.cpp`:
     - Start beep: `switch_state(STATE_LISTENING)` → `audio_beep_play_standalone(AUDIO_BEEP_START)` → `audio_play_init()` → `audio_start_recording()`
     - Stop beep: `EVT_STOP_RECORDING` handler → `audio_stop_recording()` → `audio_beep_play_standalone(AUDIO_BEEP_STOP)` → send WAV
-  - Helper functions added: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
+    - Discard beep: `EVT_DISCARD` handler → `audio_stop_recording_no_close()` → `audio_beep_play_standalone(AUDIO_BEEP_DISCARD)` → `audio_discard_recording()` → `STATE_RECORD`
+    - Reconnect beep: `EVT_WS_RECONNECT` handler → `audio_play_wav_stop()` → `ws_free_audio_buffer()` → `audio_beep_play_standalone(AUDIO_BEEP_RECONNECT)` → `ws_request_reconnect()` → `STATE_CONNECTING`
+    - Sleep beep: `enter_deep_sleep()` → `audio_beep_play_standalone(AUDIO_BEEP_SLEEP)` → display + deep sleep
+    - Wake beep: `setup()` (EXT1/other wake) → after `user_ui_init()` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)`
+  - Helper functions: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
 
 ## Config and secrets
 

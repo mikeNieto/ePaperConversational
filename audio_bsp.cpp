@@ -226,61 +226,94 @@ void audio_beep_play(audio_beep_t type)
     free(samples);
 }
 
-void audio_beep_play_standalone(audio_beep_t type)
+static uint8_t* build_beep_wav(int freq1, int dur1_ms, int freq2, int dur2_ms, float amplitude, int silence_ms, size_t* out_size)
 {
-    int freq = (type == AUDIO_BEEP_START) ? 800 : 500;
-    int duration_ms = (type == AUDIO_BEEP_STOP) ? 500 : 200;
     int sample_rate = 24000;
     int channels = 1;
     int bps = 16;
-    int silence_ms = 70;
-    int tone_ms = duration_ms - silence_ms;
-    int tone_samples = sample_rate * tone_ms / 1000;
     int silence_samples = sample_rate * silence_ms / 1000;
-    int num_samples = tone_samples + silence_samples;
+    int tone1_samples = freq1 > 0 ? sample_rate * dur1_ms / 1000 : 0;
+    int tone2_samples = freq2 > 0 ? sample_rate * dur2_ms / 1000 : 0;
+    int num_samples = silence_samples + tone1_samples + tone2_samples;
     int data_size = num_samples * channels * (bps / 8);
     size_t total_size = 44 + data_size;
 
-    Serial.printf("BEEP-WAV: %s  freq=%dHz  sr=%d  ch=%d  data=%d bytes  total=%u  (tone=%dms silence=%dms)\n",
-        type == AUDIO_BEEP_START ? "START" : "STOP",
-        freq, sample_rate, channels, data_size, total_size, tone_ms, silence_ms);
-
     uint8_t* buf = (uint8_t*)malloc(total_size);
     if (!buf) buf = (uint8_t*)heap_caps_malloc(total_size, MALLOC_CAP_SPIRAM);
-    if (!buf) { Serial.printf("BEEP-WAV: alloc failed\n"); return; }
+    if (!buf) return NULL;
 
     build_wav_header_generic(buf, data_size, sample_rate, channels, bps);
 
     int16_t* samples = (int16_t*)(buf + 44);
-    const float amplitude = 8000.0f;
-    const float two_pi_f = 2.0f * 3.14159265f * freq;
-    int fade_in_samples = sample_rate * 10 / 1000;
-    int fade_out_samples = sample_rate * 30 / 1000;
+    int fade_in = sample_rate * 5 / 1000;
+    int fade_out = sample_rate * 20 / 1000;
 
     for (int i = 0; i < num_samples; i++) {
         float value = 0.0f;
-        int ti = i - silence_samples;
-        if (ti >= 0 && ti < tone_samples) {
-            float t = (float)ti / sample_rate;
-            value = sinf(two_pi_f * t) * amplitude;
+        int pos = i - silence_samples;
 
-            float envelope = 1.0f;
-            if (ti < fade_in_samples) {
-                envelope = (float)ti / fade_in_samples;
-            } else if (ti >= tone_samples - fade_out_samples) {
-                envelope = (float)(tone_samples - 1 - ti) / fade_out_samples;
+        if (pos >= 0 && pos < tone1_samples) {
+            float t = (float)pos / sample_rate;
+            value = sinf(2.0f * 3.14159265f * freq1 * t) * amplitude;
+            float env = 1.0f;
+            if (pos < fade_in) env = (float)pos / fade_in;
+            else if (pos >= tone1_samples - fade_out && tone2_samples == 0)
+                env = (float)(tone1_samples - 1 - pos) / fade_out;
+            value *= env;
+        } else if (tone2_samples > 0) {
+            int pos2 = pos - tone1_samples;
+            if (pos2 >= 0 && pos2 < tone2_samples) {
+                float t = (float)pos2 / sample_rate;
+                value = sinf(2.0f * 3.14159265f * freq2 * t) * amplitude;
+                float env = 1.0f;
+                if (pos2 < fade_in) env = (float)pos2 / fade_in;
+                else if (pos2 >= tone2_samples - fade_out)
+                    env = (float)(tone2_samples - 1 - pos2) / fade_out;
+                value *= env;
             }
-            value *= envelope;
         }
         samples[i] = (int16_t)value;
     }
+
+    *out_size = total_size;
+    return buf;
+}
+
+void audio_beep_play_standalone(audio_beep_t type)
+{
+    const char* name = "???";
+    int freq1, dur1, freq2, dur2, silence;
+    float amp;
+
+    switch (type) {
+        case AUDIO_BEEP_START:
+            name = "START"; freq1 = 800; dur1 = 130; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
+        case AUDIO_BEEP_STOP:
+            name = "STOP"; freq1 = 500; dur1 = 330; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
+        case AUDIO_BEEP_DISCARD:
+            name = "DISCARD"; freq1 = 300; dur1 = 330; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
+        case AUDIO_BEEP_RECONNECT:
+            name = "RECONNECT"; freq1 = 1000; dur1 = 330; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
+        case AUDIO_BEEP_SLEEP:
+            name = "SLEEP"; freq1 = 900; dur1 = 100; freq2 = 600; dur2 = 100; silence = 50; amp = 4000.0f; break;
+        case AUDIO_BEEP_WAKE:
+            name = "WAKE"; freq1 = 600; dur1 = 100; freq2 = 900; dur2 = 100; silence = 50; amp = 4000.0f; break;
+        default: return;
+    }
+
+    size_t total_size;
+    uint8_t* buf = build_beep_wav(freq1, dur1, freq2, dur2, amp, silence, &total_size);
+    if (!buf) { Serial.printf("BEEP-WAV: %s alloc failed\n", name); return; }
+
+    Serial.printf("BEEP-WAV: %s  f1=%dHz/%dms  f2=%dHz/%dms  data=%u bytes  amp=%.0f\n",
+        name, freq1, dur1, freq2, dur2, total_size - 44, amp);
 
     audio_play_wav_start(buf, total_size);
     while (audio_wav_is_playing()) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     free(buf);
-    Serial.printf("BEEP-WAV: done\n");
+    Serial.printf("BEEP-WAV: %s done\n", name);
 }
 
 static void recording_task(void *arg)

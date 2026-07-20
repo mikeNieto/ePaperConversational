@@ -29,6 +29,10 @@ void audio_play_pcm_start(uint8_t* pcm_data, size_t pcm_size, int sample_rate, i
 typedef enum {
     AUDIO_BEEP_START = 0,
     AUDIO_BEEP_STOP = 1,
+    AUDIO_BEEP_DISCARD = 2,
+    AUDIO_BEEP_RECONNECT = 3,
+    AUDIO_BEEP_SLEEP = 4,
+    AUDIO_BEEP_WAKE = 5,
 } audio_beep_t;
 
 void audio_beep_play(audio_beep_t type);

@@ -8,6 +8,7 @@
 #include "src/power/board_power_bsp.h"
 #include "src/ui/screens.h"
 #include "user_config.h"
+#include "audio_bsp.h"
 
 extern epaper_driver_display *driver;
 extern board_power_bsp_t board_div;

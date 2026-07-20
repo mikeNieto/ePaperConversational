@@ -146,6 +146,8 @@ static void state_task(void *arg)
                     audio_discard_recording();
                     switch_state(STATE_RECORD);
                 } else if (evt.type == EVT_DISCARD) {
+                    audio_stop_recording_no_close();
+                    audio_beep_play_standalone(AUDIO_BEEP_DISCARD);
                     audio_discard_recording();
                     switch_state(STATE_RECORD);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
@@ -169,6 +171,7 @@ static void state_task(void *arg)
                 } else if (evt.type == EVT_WS_RECONNECT) {
                     audio_play_wav_stop();
                     ws_free_audio_buffer();
+                    audio_beep_play_standalone(AUDIO_BEEP_RECONNECT);
                     ws_request_reconnect();
                     switch_state(STATE_CONNECTING);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
@@ -463,6 +466,8 @@ void enter_deep_sleep(void)
 {
     Serial.printf("Entering deep sleep...\n");
     Serial.flush();
+
+    audio_beep_play_standalone(AUDIO_BEEP_SLEEP);
 
     if (driver) {
         driver->EPD_Init();
