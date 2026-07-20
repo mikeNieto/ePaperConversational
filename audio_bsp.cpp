@@ -229,7 +229,7 @@ void audio_beep_play(audio_beep_t type)
 void audio_beep_play_standalone(audio_beep_t type)
 {
     int freq = (type == AUDIO_BEEP_START) ? 800 : 500;
-    int duration_ms = (type == AUDIO_BEEP_STOP) ? 150 : 200;
+    int duration_ms = (type == AUDIO_BEEP_STOP) ? 500 : 200;
     int sample_rate = 24000;
     int channels = 1;
     int bps = 16;

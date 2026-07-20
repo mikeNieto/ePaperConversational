@@ -64,6 +64,16 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`)
 - **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
+- **Beep notification sounds**: short audio chirps played to indicate state transitions:
+  - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
+  - `AUDIO_BEEP_STOP` (500 Hz): plays after recording stops, before sending audio to WebSocket. 150ms total (70ms silence + 80ms tone) at 24000Hz mono 16-bit.
+  - Both use `audio_beep_play_standalone()` (`audio_bsp.cpp`) which generates a WAV in heap and plays it via `audio_play_wav_start()` → `wav_playback_task`. This is the **same codec path as the response audio**, ensuring reliable I2S TX DMA initialization.
+  - **Silence padding is critical**: the I2S TX DMA needs ~50-70ms of priming data before audio becomes audible. Without leading silence, short beeps (<200ms) are completely inaudible because the DMA never starts transmitting before the codec is closed.
+  - `audio_beep_play()` (`audio_bsp.cpp`): alternative direct-write variant (writes PCM via `esp_codec_dev_write()` to an already-open codec). Only works when codec is freshly opened — **do not use after close/reopen cycles** as the ES8311 DAC path may not re-enable.
+  - Beep integration points in `user_app.cpp`:
+    - Start beep: `switch_state(STATE_LISTENING)` → `audio_beep_play_standalone(AUDIO_BEEP_START)` → `audio_play_init()` → `audio_start_recording()`
+    - Stop beep: `EVT_STOP_RECORDING` handler → `audio_stop_recording()` → `audio_beep_play_standalone(AUDIO_BEEP_STOP)` → send WAV
+  - Helper functions added: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
 
 ## Config and secrets
 
