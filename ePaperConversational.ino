@@ -28,7 +28,7 @@ void setup()
         status_bar_set_visible(true);
         user_ui_init();
         lvgl_unlock();
-        audio_beep_play_standalone(AUDIO_BEEP_WAKE);
+        g_play_wake_beep = true;
     } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
         sleep_counter++;
         display_light_init();
@@ -49,7 +49,7 @@ void setup()
         status_bar_set_visible(true);
         user_ui_init();
         lvgl_unlock();
-        audio_beep_play_standalone(AUDIO_BEEP_WAKE);
+        g_play_wake_beep = true;
     }
 
     boot_count++;

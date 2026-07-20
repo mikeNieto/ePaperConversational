@@ -44,6 +44,7 @@ typedef enum {
 
 extern AppState g_app_state;
 extern char g_agent_text[AGENT_TEXT_SIZE];
+extern bool g_play_wake_beep;
 
 void switch_state(AppState new_state);
 

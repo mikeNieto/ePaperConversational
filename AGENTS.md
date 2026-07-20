@@ -66,7 +66,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
 - **Beep notification sounds**: short audio chirps played to indicate state transitions:
   - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
-  - `AUDIO_BEEP_STOP` (500 Hz): plays after recording stops, before sending audio to WebSocket. 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
+  - `AUDIO_BEEP_STOP` (500→800 Hz ascending two-tone): plays after recording stops, before sending audio to WebSocket. 200ms total (50ms silence + 75ms@500Hz + 75ms@800Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
   - `AUDIO_BEEP_DISCARD` (300 Hz): plays when recording is discarded via PWR button (`EVT_DISCARD`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
   - `AUDIO_BEEP_RECONNECT` (1000 Hz): plays when PWR is pressed during `STATE_RESPONSE` to reconnect WebSocket (`EVT_WS_RECONNECT`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
   - `AUDIO_BEEP_SLEEP` (900→600 Hz descending two-tone): plays when entering deep sleep (`enter_deep_sleep()`). 250ms total (50ms silence + 100ms@900Hz + 100ms@600Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
@@ -80,7 +80,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
     - Discard beep: `EVT_DISCARD` handler → `audio_stop_recording_no_close()` → `audio_beep_play_standalone(AUDIO_BEEP_DISCARD)` → `audio_discard_recording()` → `STATE_RECORD`
     - Reconnect beep: `EVT_WS_RECONNECT` handler → `audio_play_wav_stop()` → `ws_free_audio_buffer()` → `audio_beep_play_standalone(AUDIO_BEEP_RECONNECT)` → `ws_request_reconnect()` → `STATE_CONNECTING`
     - Sleep beep: `enter_deep_sleep()` → `audio_beep_play_standalone(AUDIO_BEEP_SLEEP)` → display + deep sleep
-    - Wake beep: `setup()` (EXT1/other wake) → after `user_ui_init()` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)`
+    - Wake beep: `setup()` (EXT1/other wake) sets `g_play_wake_beep = true` → `state_task` on `EVT_WS_CONNECTED` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)` → `g_play_wake_beep = false` → `switch_state(STATE_RECORD)`. Only plays on wake-from-sleep, not on first boot or WS reconnects.
   - Helper functions: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
 
 ## Config and secrets

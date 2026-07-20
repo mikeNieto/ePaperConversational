@@ -38,6 +38,7 @@ static QueueHandle_t gpio_evt_queue = NULL;
 TaskHandle_t sleep_timer_handle = NULL;
 
 AppState g_app_state = STATE_CONNECTING;
+bool g_play_wake_beep = false;
 char g_agent_text[AGENT_TEXT_SIZE] = {0};
 
 static lv_coord_t last_touch_x = 0;
@@ -122,6 +123,10 @@ static void state_task(void *arg)
         if (xQueueReceive(state_queue, &evt, pdMS_TO_TICKS(200)) == pdTRUE) {
             if (g_app_state == STATE_CONNECTING) {
                 if (evt.type == EVT_WS_CONNECTED) {
+                    if (g_play_wake_beep) {
+                        audio_beep_play_standalone(AUDIO_BEEP_WAKE);
+                        g_play_wake_beep = false;
+                    }
                     switch_state(STATE_RECORD);
                 }
             } else if (g_app_state == STATE_RECORD) {
@@ -432,14 +437,6 @@ void touch_task(void *arg)
                 Serial.printf("Touch: (%d,%d)\n", x, y);
                 Serial.flush();
                 activity_feed();
-
-                if (g_app_state == STATE_RECORD) {
-                    AppEvent evt = { EVT_START_RECORDING, 0 };
-                    xQueueSend(state_queue, &evt, 0);
-                } else if (g_app_state == STATE_LISTENING) {
-                    AppEvent evt = { EVT_STOP_RECORDING, 0 };
-                    xQueueSend(state_queue, &evt, 0);
-                }
             } else {
                 last_touch_pressed = false;
             }

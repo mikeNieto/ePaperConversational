@@ -289,7 +289,7 @@ void audio_beep_play_standalone(audio_beep_t type)
         case AUDIO_BEEP_START:
             name = "START"; freq1 = 800; dur1 = 130; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
         case AUDIO_BEEP_STOP:
-            name = "STOP"; freq1 = 500; dur1 = 330; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
+            name = "STOP"; freq1 = 500; dur1 = 75; freq2 = 800; dur2 = 75; silence = 50; amp = 4000.0f; break;
         case AUDIO_BEEP_DISCARD:
             name = "DISCARD"; freq1 = 300; dur1 = 330; freq2 = 0; dur2 = 0; silence = 70; amp = 8000.0f; break;
         case AUDIO_BEEP_RECONNECT:
