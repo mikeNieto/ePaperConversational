@@ -65,6 +65,11 @@ void switch_state(AppState new_state)
 {
     if (!lvgl_lock(2000)) return;
 
+    if (new_state != STATE_CONNECTING) {
+        wifi_led_write(false);
+    }
+    g_app_state = new_state;
+
     lv_obj_t* old_scr = lv_scr_act();
     lv_obj_t* new_scr = NULL;
 
@@ -91,7 +96,6 @@ void switch_state(AppState new_state)
         }
     }
 
-    g_app_state = new_state;
     lvgl_unlock();
 
     if (new_state == STATE_RESPONSE) {

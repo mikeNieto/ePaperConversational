@@ -292,6 +292,19 @@ void ws_task(void *arg)
     ws_init();
 
     for (;;) {
+        if (g_app_state == STATE_CONNECTING) {
+            static unsigned long last_led_ms = 0;
+            static bool ws_led_state = false;
+            unsigned long now = millis();
+            if (now - last_led_ms >= 200) {
+                last_led_ms = now;
+                ws_led_state = !ws_led_state;
+                wifi_led_write(ws_led_state);
+            }
+        } else {
+            wifi_led_write(false);
+        }
+
         if (!wifi_is_connected()) {
             if (connected) { client.close(); connected = false; }
             vTaskDelay(pdMS_TO_TICKS(500));

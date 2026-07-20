@@ -8,8 +8,6 @@
 #include "src/ui/status_bar.h"
 
 static const char *TAG_WIFI = "wifi";
-static bool led_state = false;
-
 #define LED_PIN GPIO_NUM_3
 
 static void led_init(void)
@@ -20,12 +18,12 @@ static void led_init(void)
     cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
     cfg.pull_up_en = GPIO_PULLUP_DISABLE;
     gpio_config(&cfg);
-    gpio_set_level(LED_PIN, 0);
+    gpio_set_level(LED_PIN, 1);
 }
 
 static void led_set(bool on)
 {
-    gpio_set_level(LED_PIN, on ? 1 : 0);
+    gpio_set_level(LED_PIN, on ? 0 : 1);
 }
 
 void wifi_led_write(bool on)
@@ -64,8 +62,6 @@ void wifi_task(void *arg)
                 Serial.printf("WiFi connected. IP: %s\n", WiFi.localIP().toString().c_str());
             }
         } else {
-            led_state = !led_state;
-            led_set(led_state);
             EventBits_t bits = xEventGroupGetBits(wifi_event_group);
             if (bits & WIFI_BIT_CONNECTED) {
                 xEventGroupClearBits(wifi_event_group, WIFI_BIT_CONNECTED);

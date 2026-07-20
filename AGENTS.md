@@ -62,8 +62,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - Partial refresh (`EPD_DisplayPart()`) for normal operation; full refresh (`EPD_Display()` after `EPD_Init()`) only in `enter_deep_sleep()` before deep sleep
 - Touch detection: runtime-probed via I2C at `0x38` (FT6336), flag `hasTouch` set; `touch_task` only created if `hasTouch == true`
 - Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`)
-- All display strings use `currentLang->` (i18n struct `LangMessages`, only `MSG_ES` implemented)
-- `lvgl_lock()` returns `bool` — check the return value; if false, don't proceed with widget operations
+- **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
+- **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
 
 ## Config and secrets
 
