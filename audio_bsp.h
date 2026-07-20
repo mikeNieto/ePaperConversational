@@ -26,6 +26,16 @@ void audio_play_wav_replay(void);
 bool audio_wav_is_playing(void);
 void audio_play_pcm_start(uint8_t* pcm_data, size_t pcm_size, int sample_rate, int channels, int bits);
 
+typedef enum {
+    AUDIO_BEEP_START = 0,
+    AUDIO_BEEP_STOP = 1,
+} audio_beep_t;
+
+void audio_beep_play(audio_beep_t type);
+void audio_beep_play_standalone(audio_beep_t type);
+uint32_t audio_stop_recording_no_close(void);
+void audio_close_codec(void);
+
 #ifdef __cplusplus
 }
 #endif

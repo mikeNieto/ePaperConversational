@@ -78,6 +78,7 @@ void switch_state(AppState new_state)
     } else if (new_state == STATE_RECORD) {
         new_scr = create_screen_2_record();
     } else if (new_state == STATE_LISTENING) {
+        audio_beep_play_standalone(AUDIO_BEEP_START);
         audio_play_init();
         audio_start_recording();
         new_scr = create_screen_2b_listening();
@@ -132,6 +133,7 @@ static void state_task(void *arg)
             } else if (g_app_state == STATE_LISTENING) {
                 if (evt.type == EVT_STOP_RECORDING) {
                     audio_stop_recording();
+                    audio_beep_play_standalone(AUDIO_BEEP_STOP);
                     uint8_t* wav = audio_get_wav_buffer();
                     uint32_t size = audio_get_wav_size();
                     if (wav && size > 44) {
