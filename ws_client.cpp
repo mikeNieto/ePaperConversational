@@ -8,6 +8,7 @@
 #include "src/ui/screens.h"
 #include "messages.h"
 #include "esp_heap_caps.h"
+#include "audio_stream.h"
 
 extern QueueHandle_t state_queue;
 
@@ -105,6 +106,7 @@ static void free_audio_buffer(void)
     audio_capacity = 0;
     audio_streaming = false;
     audio_is_pcm = false;
+    stream_buf_free();
 }
 
 static void send_event(AppEvent evt)
@@ -118,34 +120,10 @@ static void onMessageCallback(WebsocketsMessage message)
         size_t len = message.length();
 
         if (audio_streaming) {
-            if (!audio_buffer) {
-                audio_capacity = len > 262144 ? len : 524288;
-                audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
-                if (!audio_buffer) {
-                    Serial.printf("WS: failed to alloc %u for streaming\n", (unsigned int)audio_capacity);
-                    return;
-                }
-                audio_offset = 0;
+            if (!stream_buf_write((const uint8_t*)message.c_str(), len, 5000)) {
+                Serial.printf("WS: stream buf write failed (full/timeout), chunk lost\n");
             }
-            if (audio_offset + len > audio_capacity) {
-                size_t new_cap = audio_capacity + (1024 * 1024);
-                if (new_cap < audio_offset + len) new_cap = audio_offset + len;
-                uint8_t* new_buf = (uint8_t*)heap_caps_malloc(new_cap, MALLOC_CAP_SPIRAM);
-                if (new_buf) {
-                    memcpy(new_buf, audio_buffer, audio_offset);
-                    free(audio_buffer);
-                    audio_buffer = new_buf;
-                    audio_capacity = new_cap;
-                    Serial.printf("WS: audio buf grown to %u\n", (unsigned int)audio_capacity);
-                } else {
-                    Serial.printf("WS: audio buf grow FAILED need=%u cap=%u\n",
-                                   (unsigned int)new_cap, (unsigned int)audio_capacity);
-                }
-            }
-            if (audio_buffer && audio_offset + len <= audio_capacity) {
-                memcpy(audio_buffer + audio_offset, message.c_str(), len);
-                audio_offset += len;
-            }
+            audio_offset += len;
             if (audio_offset % (32 * 1024) < len || audio_offset == len) {
                 Serial.printf("WS BIN chunk: %u total=%u\n", (unsigned int)len, (unsigned int)audio_offset);
             }
@@ -176,24 +154,14 @@ static void onMessageCallback(WebsocketsMessage message)
         audio_ch = parse_json_int(payload, "channels", 1);
         audio_bps = parse_json_int(payload, "bits", 16);
         if (audio_ch < 1 || audio_ch > 2) audio_ch = 1;
-        audio_capacity = 5 * 1024 * 1024;
-        audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
-        if (!audio_buffer) {
-            audio_capacity = 3 * 1024 * 1024;
-            audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
-        }
-        if (!audio_buffer) {
-            audio_capacity = 1024 * 1024;
-            audio_buffer = (uint8_t*)heap_caps_malloc(audio_capacity, MALLOC_CAP_SPIRAM);
-        }
-        if (audio_buffer) {
-            Serial.printf("WS: audio buf pre-alloc %u bytes\n", (unsigned int)audio_capacity);
-        }
+        audio_stream_playback_start(audio_sr, audio_ch, audio_bps);
+        Serial.printf("WS: audio streaming started %dHz %dch %dbps\n", audio_sr, audio_ch, audio_bps);
     } else if (parse_json_has_type(payload, "audio_end")) {
         audio_streaming = false;
-        audio_size = audio_offset;
-        Serial.printf("WS: pcm streaming done %u bytes, %dHz %dch %dbps\n",
-                       (unsigned int)audio_size, audio_sr, audio_ch, audio_bps);
+        stream_buf_signal_end();
+        audio_size = 0;
+        Serial.printf("WS: pcm streaming ended, %dHz %dch %dbps\n",
+                       audio_sr, audio_ch, audio_bps);
     } else if (parse_json_has_type(payload, "audio_info")) {
         Serial.flush();
     } else if (parse_json_has_type(payload, "status")) {

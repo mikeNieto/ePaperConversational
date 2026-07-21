@@ -57,6 +57,11 @@
 #define AGENT_TEXT_SIZE 4096
 #define _WS_CONFIG_MAX_MESSAGE_SIZE (512 * 1024)
 
+/* Audio streaming */
+#define STREAM_BUF_SIZE       524288   // 512KB ring buffer (~10.9s @ 24000Hz mono 16-bit)
+#define STREAM_MIN_FILL_BYTES 24000    // minimum before starting playback (0.5s)
+#define STREAM_TIMEOUT_MS     10000    // abort streaming if no audio_end within this time
+
 #include "user_config_secrets.h"
 
 #endif

@@ -101,14 +101,16 @@ void switch_state(AppState new_state)
     lvgl_unlock();
 
     if (new_state == STATE_RESPONSE) {
-        uint8_t* wav_buf = ws_get_audio_buffer();
-        size_t wav_sz = ws_get_audio_size();
-        if (wav_buf && wav_sz > 0) {
-            if (ws_audio_is_pcm()) {
-                audio_play_pcm_start(wav_buf, wav_sz,
-                    ws_audio_get_sample_rate(), ws_audio_get_channels(), ws_audio_get_bits());
-            } else {
-                audio_play_wav_start(wav_buf, wav_sz);
+        if (!audio_wav_is_playing()) {
+            uint8_t* wav_buf = ws_get_audio_buffer();
+            size_t wav_sz = ws_get_audio_size();
+            if (wav_buf && wav_sz > 0) {
+                if (ws_audio_is_pcm()) {
+                    audio_play_pcm_start(wav_buf, wav_sz,
+                        ws_audio_get_sample_rate(), ws_audio_get_channels(), ws_audio_get_bits());
+                } else {
+                    audio_play_wav_start(wav_buf, wav_sz);
+                }
             }
         }
     }
@@ -163,9 +165,13 @@ static void state_task(void *arg)
                 if (evt.type == EVT_RESPONSE_READY) {
                     switch_state(STATE_RESPONSE);
                 } else if (evt.type == EVT_WS_ERROR) {
+                    audio_play_wav_stop();
+                    ws_free_audio_buffer();
                     show_error_message(currentLang->error_conexion, 2000);
                     switch_state(STATE_RECORD);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    audio_play_wav_stop();
+                    ws_free_audio_buffer();
                     switch_state(STATE_CONNECTING);
                 }
             } else if (g_app_state == STATE_RESPONSE) {

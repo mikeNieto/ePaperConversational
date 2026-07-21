@@ -12,6 +12,8 @@
 #include "src/esp_codec_dev/include/esp_codec_dev.h"
 #include "esp_heap_caps.h"
 #include "user_app.h"
+#include "audio_stream.h"
+#include "user_config.h"
 
 extern QueueHandle_t state_queue;
 
@@ -589,9 +591,123 @@ void audio_play_pcm_start(uint8_t* pcm_data, size_t pcm_size, int sample_rate, i
     xTaskCreatePinnedToCore(wav_playback_task, "wav_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
 }
 
+static void stream_playback_task(void *arg)
+{
+    stream_buf_set_reader(xTaskGetCurrentTaskHandle());
+
+    uint32_t start_ms = millis();
+    uint32_t last_data_ms = start_ms;
+    bool timed_out = false;
+
+    while (!wav_stop_flag) {
+        size_t avail = stream_buf_available();
+        if (avail >= STREAM_MIN_FILL_BYTES) break;
+        if (stream_buf_is_ended()) break;
+        if (millis() - start_ms > STREAM_TIMEOUT_MS) {
+            Serial.printf("STREAM: timeout waiting for initial fill\n");
+            timed_out = true;
+            break;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200));
+    }
+
+    if (timed_out || wav_stop_flag) {
+        stream_buf_free();
+        wav_playing = false;
+        wav_task_handle = NULL;
+        activity_feed();
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (codec_opened) {
+        esp_codec_dev_close(playback);
+        esp_codec_dev_close(record);
+        codec_opened = false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    int sr = wav_pcm_sr;
+    int ch = wav_pcm_ch;
+    int bps = wav_pcm_bps;
+    wav_pcm_override = false;
+
+    Serial.printf("STREAM playback: %d Hz, %d ch, %d bps\n", sr, ch, bps);
+
+    esp_codec_dev_sample_info_t fs = {};
+    fs.sample_rate = sr;
+    fs.channel = ch;
+    fs.bits_per_sample = bps;
+    esp_codec_dev_set_out_vol(playback, 100.0);
+    esp_codec_dev_open(playback, &fs);
+    codec_opened = true;
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    while (!wav_stop_flag) {
+        uint8_t chunk[4096];
+        size_t avail = stream_buf_available();
+        if (avail == 0) {
+            if (stream_buf_is_ended()) break;
+            if (millis() - last_data_ms > STREAM_TIMEOUT_MS) {
+                Serial.printf("STREAM: timeout waiting for data\n");
+                break;
+            }
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        if (avail > 4096) avail = 4096;
+        size_t got = stream_buf_read(chunk, avail);
+
+        if (got > 0) {
+            last_data_ms = millis();
+            int ret = esp_codec_dev_write(playback, chunk, got);
+            if (ret != ESP_CODEC_DEV_OK) {
+                vTaskDelay(pdMS_TO_TICKS(2));
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+        }
+    }
+
+    esp_codec_dev_close(playback);
+    codec_opened = false;
+    stream_buf_free();
+    wav_playing = false;
+    wav_task_handle = NULL;
+    activity_feed();
+    Serial.printf("STREAM playback finished\n");
+    vTaskDelete(NULL);
+}
+
+void audio_stream_playback_start(int sample_rate, int channels, int bits)
+{
+    if (wav_playing) {
+        wav_stop_flag = true;
+        if (wav_task_handle) xTaskNotifyGive(wav_task_handle);
+        while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!stream_buf_init(STREAM_BUF_SIZE)) {
+        Serial.printf("STREAM: ring buf init failed, aborting\n");
+        return;
+    }
+    wav_pcm_override = true;
+    wav_pcm_sr = sample_rate;
+    wav_pcm_ch = channels;
+    wav_pcm_bps = bits;
+    wav_stop_flag = false;
+    wav_replay_flag = false;
+    wav_playing = true;
+    stream_buf_reset_stream();
+    xTaskCreatePinnedToCore(stream_playback_task, "stream_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
+}
+
 void audio_play_wav_stop(void)
 {
     wav_stop_flag = true;
+    if (wav_task_handle) {
+        xTaskNotifyGive(wav_task_handle);
+    }
     while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
     wav_playing = false;
 }

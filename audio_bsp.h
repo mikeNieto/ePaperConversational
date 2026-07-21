@@ -39,6 +39,7 @@ void audio_beep_play(audio_beep_t type);
 void audio_beep_play_standalone(audio_beep_t type);
 uint32_t audio_stop_recording_no_close(void);
 void audio_close_codec(void);
+void audio_stream_playback_start(int sample_rate, int channels, int bits);
 
 #ifdef __cplusplus
 }
