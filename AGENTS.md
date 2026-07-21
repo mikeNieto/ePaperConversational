@@ -19,7 +19,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - **Single core (Core 1)**: all FreeRTOS tasks pinned to Core 1 via `xTaskCreatePinnedToCore(..., 1)`
 - **Task list** (name, priority, stack):
   - `LVGL` (4, 8KB) — LVGL tick handler, render loop, owns the LVGL mutex
-  - `ws_task` (3, 20KB) — WebSocket connect/poll/send/receive, JSON parsing, audio buffer mgmt (needs 20KB due to String URL parsing + large local vars)
+  - `ws_task` (3, 20KB) — WebSocket connect/poll/send/receive, JSON parsing, audio buffer mgmt (needs 20KB due to String URL parsing + large local vars). Also writes incoming PCM chunks to the streaming ring buffer via `stream_buf_write()`.
+  - `stream_task` (5, 8KB) — **created dynamically on `audio_start`**; streaming audio playback: reads from ring buffer, writes to ES8311 codec, closes on `audio_end` or timeout
   - `state_task` (3, 8KB) — state machine consuming `state_queue` events, drives screen transitions
   - `button_task` (3, 4KB) — polls `boot_groups`/`pwr_groups` event bits, sends `AppEvent` to `state_queue`
   - `touch_task` (3, 4KB) — **only created if FT6336 detected**; sends `AppEvent` to `state_queue`
@@ -36,16 +37,37 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - Touch: `lv_indev_touch_read_cb` reads from global `last_touch_x/y/pressed` set by `touch_task`
   - `lv_tick_inc(5)` driven by `esp_timer` at 5ms period
 - **WebSocket communication** (not REST): all audio/data flows through a single WebSocket to `ws://<host>:<port>/ws`
-  - Binary messages = MP3 or PCM audio from backend; text messages = JSON status/token/text/done/error and streaming control (`audio_start`/`audio_end` for PCM chunks)
+  - Binary messages = PCM audio chunks from backend (streaming); text messages = JSON status/token/text/done/error and streaming control (`audio_start`/`audio_end`)
   - Client sends: binary WAV audio + `{"type":"audio_end"}` text message
+  - **Streaming audio protocol** (backend → client):
+    - `{"type":"audio_start","sample_rate":24000,"channels":1,"bits":16}` — begins a PCM stream. Client creates a 512KB PSRAM ring buffer and spawns `stream_playback_task` (priority 5)
+    - Binary PCM chunks (typically 32KB each) — client writes to ring buffer via `stream_buf_write()`. Blocks with 5s timeout if buffer is full (backpressure via TCP window)
+    - `{"type":"audio_end"}` — signals end of stream. Client calls `stream_buf_signal_end()`. Playback task drains remaining data and closes codec
+    - `{"type":"done"}` — triggers `EVT_RESPONSE_READY`, transitions UI to `STATE_RESPONSE` (audio may already be playing or finished)
+    - **Backend must send chunks at real-time speed** (~48KB/s for 24000Hz mono 16-bit), interleaving text JSON messages between binary chunks. Burst sends will cause TCP backpressure blocking
   - Thread-safe via `ws_cmd_queue` (FreeRTOS queue of `WsCmd` struct)
   - **No ArduinoJson** — JSON parsed with hand-rolled `parse_json_string()` via `String::indexOf` (requires Arduino's String class)
   - `WiFi.setSleep(false)` in `ws_task` to keep radio alive
+
+- **Streaming audio playback** (`audio_stream.h`/`.cpp`, `audio_bsp.cpp:stream_playback_task`):
+  - **Ring buffer** (`audio_stream.cpp`): 512KB circular buffer in PSRAM (`STREAM_BUF_SIZE`), single-producer (WS callback) / single-consumer (playback task)
+  - **Blocking writes**: `stream_buf_write(data, len, timeout_ms)` blocks up to `timeout_ms` if buffer is full, using a binary semaphore signaled by the reader. Provides natural TCP backpressure
+  - **Playback task** (`stream_playback_task`, priority 5): spawned by `audio_stream_playback_start()` when `audio_start` JSON arrives
+    - Waits for min fill threshold (`STREAM_MIN_FILL_BYTES` = 24KB, ~0.5s) or `audio_end` signal
+    - Opens ES8311 codec at the specified sample rate/channels/bits
+    - Reads 4KB chunks from ring buffer, writes to codec, yields 1ms between successful writes (gives `ws_task` priority 3 time to run)
+    - On `stream_buf_is_ended()` + empty buffer: closes codec, frees ring buffer, sets `wav_playing = false`
+    - On `wav_stop_flag`: aborts immediately (triggered by `audio_play_wav_stop()`)
+    - Timeout: aborts if no data for `STREAM_TIMEOUT_MS` (10s) from last successful read
+  - **Fallback path**: if backend sends a single binary WAV/PCM without `audio_start`/`audio_end` protocol, `switch_state(STATE_RESPONSE)` checks `!audio_wav_is_playing()` and falls back to `audio_play_wav_start()`/`audio_play_pcm_start()` with the old full-buffer approach
+  - **Cleanup on error/disconnect**: `STATE_RECEIVING` handlers call `audio_play_wav_stop()` + `ws_free_audio_buffer()` (frees ring buffer via `stream_buf_free()`) before transitioning
+  - **Config constants** (`user_config.h`): `STREAM_BUF_SIZE` (524288), `STREAM_MIN_FILL_BYTES` (24000), `STREAM_TIMEOUT_MS` (10000)
+
 - **Deep sleep**: `RTC_DATA_ATTR` vars: `boot_count`, `sleep_counter` (no UUID persistence in current code)
   - Wake causes: `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (60 min)
   - Two entry paths: `enter_deep_sleep()` (full EPD refresh + `EPD_Display()`) and `enter_deep_sleep_light()` (no display refresh, used for timer auto-wake)
   - `rtc_gpio_hold_en(GPIO_NUM_17)` to keep VBAT powered
-- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL buffers (80KB×2), recording buffer (1.92MB), MP3 download buffer (~200KB)
+- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL buffers (80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB)
 
 ## Key conventions
 
@@ -107,6 +129,10 @@ Configuration is split into two files:
 | `src/esp_codec_dev/` | External codec library (v1.3.5, ESP-IDF component) |
 | `src/ui/screens.cpp` | 6 screen creation functions + receiving status updater |
 | `src/ui/status_bar.cpp` | WiFi + battery status bar widget |
+| `audio_stream.h` / `audio_stream.cpp` | Streaming ring buffer: 512KB PSRAM circular buffer with blocking writes + binary semaphore backpressure |
+| `ws_client.h` / `ws_client.cpp` | WebSocket client: connect, send/receive, JSON parsing, audio buffer mgmt, streaming protocol handling |
+| `audio_bsp.h` / `audio_bsp.cpp` | ES8311 codec control, recording task, WAV/PCM playback tasks, streaming playback init |
+| `user_config.h` | All non-secret configuration constants including streaming params |
 | `specs/` | TechnicalSpec.md and ImplementationPlan.md (design docs — **note: architecture has diverged**; spec describes REST API but code uses WebSocket) |
 
 ## State transition diagram (actual code)
