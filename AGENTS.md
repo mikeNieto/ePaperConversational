@@ -86,7 +86,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`)
 - **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
-- **Multi-WiFi**: `WIFI_NETWORKS` macro in `user_config_secrets.h` defines a list of `{ "SSID", "password" }` pairs with `WIFI_NETWORK_COUNT`. On boot and every disconnect, `wifi_connect_best()` scans all visible APs, filters to known SSIDs, picks the one with strongest RSSI (dBm), and connects. Blocking wait up to `WIFI_CONNECT_TIMEOUT_MS` (10s). Falls back to rescan every 5s if no known networks are in range.
+- **Multi-WiFi**: `WIFI_NETWORKS` macro in `user_config_secrets.h` defines a list of `{ "SSID", "password" }` pairs with `WIFI_NETWORK_COUNT`. On boot and every disconnect, `wifi_connect_best()` scans all visible APs, filters to known SSIDs, picks the one with strongest RSSI (dBm), and connects via `WiFi.begin()`. Has a guard at the top (`if (WiFi.status() == WL_CONNECTED) return;`) to prevent re-scanning while connected (avoids WS drop from transient status flickers). **Synchronous/blocking**: `wifi_init()` calls `wifi_connect_best()` which blocks up to `WIFI_CONNECT_TIMEOUT_MS` (10s) waiting for connection — unlike old async `WiFi.begin()`. `wifi_task` calls `wifi_connect_best()` on every disconnect (replacing old `WiFi.reconnect()`). Falls back to rescan every 5s if no known networks are in range.
+- **Boot screen flow**: `lvgl_port_init()` (idempotent, static guard) is called inside `user_app_init()` right after display init and BEFORE any FreeRTOS tasks — ensures LVGL display driver is registered before `state_task` can call `switch_state()`. `user_ui_init()` (also idempotent) is called right after, loading "Conectando..." screen immediately (before the blocking `wifi_init()`), so the user sees something during WiFi scan instead of blank screen. After `setup()` releases LVGL lock, `switch_state(g_app_state)` is called to re-sync the screen in case `state_task` already transitioned (fixes race where `user_ui_init()` overwrites the correct screen).
 - **Beep notification sounds**: short audio chirps played to indicate state transitions:
   - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
   - `AUDIO_BEEP_STOP` (500→800 Hz ascending two-tone): plays after recording stops, before sending audio to WebSocket. 200ms total (50ms silence + 75ms@500Hz + 75ms@800Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
@@ -103,14 +104,14 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
     - Discard beep: `EVT_DISCARD` handler → `audio_stop_recording_no_close()` → `audio_beep_play_standalone(AUDIO_BEEP_DISCARD)` → `audio_discard_recording()` → `STATE_RECORD`
     - Reconnect beep: `EVT_WS_RECONNECT` handler → `audio_play_wav_stop()` → `ws_free_audio_buffer()` → `audio_beep_play_standalone(AUDIO_BEEP_RECONNECT)` → `ws_request_reconnect()` → `STATE_CONNECTING`
     - Sleep beep: `enter_deep_sleep()` → `audio_beep_play_standalone(AUDIO_BEEP_SLEEP)` → display + deep sleep
-    - Wake beep: `setup()` (EXT1/other wake) sets `g_play_wake_beep = true` → `state_task` on `EVT_WS_CONNECTED` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)` → `g_play_wake_beep = false` → `switch_state(STATE_RECORD)`. Only plays on wake-from-sleep, not on first boot or WS reconnects.
+    - Wake beep: `setup()` (EXT1/other wake) sets `g_play_wake_beep = true` **before** `user_app_init()` → `state_task` on `EVT_WS_CONNECTED` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)` → `g_play_wake_beep = false` → `switch_state(STATE_RECORD)`. Only plays on wake-from-sleep, not on first boot or WS reconnects. Flag must be set before tasks start to avoid race with `EVT_WS_CONNECTED`.
   - Helper functions: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
 
 ## Config and secrets
 
 Configuration is split into two files:
 
-- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings. **When adding new config constants, add them here.**
+- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings, `WIFI_CONNECT_TIMEOUT_MS`. **When adding new config constants, add them here.**
 - **`user_config_secrets.h`** — gitignored (not tracked). Contains the secret defines: `WIFI_NETWORKS` (multi-WiFi list with SSID+password pairs), `WIFI_NETWORK_COUNT`, `API_BASE_URL`. `user_config.h` includes this file at the end.
 - **`user_config_secrets.example.h`** — tracked template with dummy values. New clones: `cp user_config_secrets.example.h user_config_secrets.h` and edit with real values.
 
