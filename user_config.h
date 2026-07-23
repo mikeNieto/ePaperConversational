@@ -62,6 +62,9 @@
 #define STREAM_MIN_FILL_BYTES 24000    // minimum before starting playback (0.5s)
 #define STREAM_TIMEOUT_MS     10000    // abort streaming if no audio_end within this time
 
+/* WiFi */
+#define WIFI_CONNECT_TIMEOUT_MS 10000 // timeout per SSID connection attempt
+
 #include "user_config_secrets.h"
 
 #endif

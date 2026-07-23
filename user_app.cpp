@@ -269,6 +269,10 @@ static void lvgl_touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data)
 
 void lvgl_port_init(void)
 {
+    static bool initialized = false;
+    if (initialized) return;
+    initialized = true;
+
     lv_init();
 
     lv_color_t *buffer_1 = (lv_color_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_SPIRAM);
@@ -315,8 +319,13 @@ void lvgl_port_init(void)
     xTaskCreatePinnedToCore(lvgl_port_task, "LVGL", 8 * 1024, NULL, 4, NULL, 1);
 }
 
+static bool ui_screen_loaded = false;
+
 void user_ui_init(void)
 {
+    if (ui_screen_loaded) return;
+    ui_screen_loaded = true;
+
     lv_obj_t* screen = create_screen_connecting();
     lv_scr_load(screen);
     lv_timer_handler();
@@ -601,12 +610,15 @@ void user_app_init(void)
     ESP_LOGI(TAG, "Display init complete. Heap free: %d", esp_get_free_heap_size());
     Serial.printf("ePaperConversational v%s ready.\n", FIRMWARE_VERSION);
 
+    lvgl_port_init();
+
+    lvgl_lock(-1);
+    user_ui_init();
+    lvgl_unlock();
+
     state_queue = xQueueCreate(10, sizeof(AppEvent));
     user_button_init();
     xTaskCreatePinnedToCore(button_task, "btn_task", 4 * 1024, NULL, 3, NULL, 1);
-
-    lvgl_mux = xSemaphoreCreateMutex();
-    assert(lvgl_mux);
 
     xTaskCreatePinnedToCore(state_task, "state_task", 8 * 1024, NULL, 3, NULL, 1);
 

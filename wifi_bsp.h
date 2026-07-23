@@ -15,6 +15,7 @@ extern EventGroupHandle_t wifi_event_group;
 
 void wifi_init(void);
 bool wifi_is_connected(void);
+void wifi_connect_best(void);
 void wifi_task(void *arg);
 void wifi_led_write(bool on);
 

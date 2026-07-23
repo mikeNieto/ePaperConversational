@@ -24,7 +24,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - `state_task` (3, 8KB) — state machine consuming `state_queue` events, drives screen transitions
   - `button_task` (3, 4KB) — polls `boot_groups`/`pwr_groups` event bits, sends `AppEvent` to `state_queue`
   - `touch_task` (3, 4KB) — **only created if FT6336 detected**; sends `AppEvent` to `state_queue`
-  - `wifi_task` (2, 4KB) — WiFi connect/reconnect loop
+  - `wifi_task` (2, 4KB) — WiFi scan-and-connect loop: scans for known networks, picks strongest RSSI
   - `bat_task` (1, 4KB) — periodic battery voltage read + status bar update
   - `sleep_timer` (1, 4KB) — inactivity timer (60s), skips during LISTENING/RECEIVING/RESPONSE(when playing)
 - **State machine**: `AppState` enum with 5 states (`STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4`), driven by `AppEvent` struct (`type` + `data`) on `state_queue`
@@ -86,6 +86,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`)
 - **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
+- **Multi-WiFi**: `WIFI_NETWORKS` macro in `user_config_secrets.h` defines a list of `{ "SSID", "password" }` pairs with `WIFI_NETWORK_COUNT`. On boot and every disconnect, `wifi_connect_best()` scans all visible APs, filters to known SSIDs, picks the one with strongest RSSI (dBm), and connects. Blocking wait up to `WIFI_CONNECT_TIMEOUT_MS` (10s). Falls back to rescan every 5s if no known networks are in range.
 - **Beep notification sounds**: short audio chirps played to indicate state transitions:
   - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
   - `AUDIO_BEEP_STOP` (500→800 Hz ascending two-tone): plays after recording stops, before sending audio to WebSocket. 200ms total (50ms silence + 75ms@500Hz + 75ms@800Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
@@ -110,7 +111,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 Configuration is split into two files:
 
 - **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings. **When adding new config constants, add them here.**
-- **`user_config_secrets.h`** — gitignored (not tracked). Contains ONLY the 3 secret defines: `WIFI_SSID`, `WIFI_PASSWORD`, `API_BASE_URL`. `user_config.h` includes this file at the end.
+- **`user_config_secrets.h`** — gitignored (not tracked). Contains the secret defines: `WIFI_NETWORKS` (multi-WiFi list with SSID+password pairs), `WIFI_NETWORK_COUNT`, `API_BASE_URL`. `user_config.h` includes this file at the end.
 - **`user_config_secrets.example.h`** — tracked template with dummy values. New clones: `cp user_config_secrets.example.h user_config_secrets.h` and edit with real values.
 
 **Rule**: if a new constant is NOT a secret (no passwords, keys, personal IPs/URLs), put it in `user_config.h` only. If it IS a secret, add it to BOTH `user_config_secrets.h` and `user_config_secrets.example.h` (with a dummy in the example).

@@ -20,15 +20,17 @@ void setup()
         status_bar_set_visible(true);
         user_ui_init();
         lvgl_unlock();
+        if (g_app_state != STATE_CONNECTING) switch_state(g_app_state);
     } else if (cause == ESP_SLEEP_WAKEUP_EXT1) {
         sleep_counter = 0;
+        g_play_wake_beep = true;
         user_app_init();
         lvgl_port_init();
         lvgl_lock(-1);
         status_bar_set_visible(true);
         user_ui_init();
         lvgl_unlock();
-        g_play_wake_beep = true;
+        if (g_app_state != STATE_CONNECTING) switch_state(g_app_state);
     } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
         sleep_counter++;
         display_light_init();
@@ -43,13 +45,14 @@ void setup()
         vTaskDelay(pdMS_TO_TICKS(800));
         enter_deep_sleep_light();
     } else {
+        g_play_wake_beep = true;
         user_app_init();
         lvgl_port_init();
         lvgl_lock(-1);
         status_bar_set_visible(true);
         user_ui_init();
         lvgl_unlock();
-        g_play_wake_beep = true;
+        if (g_app_state != STATE_CONNECTING) switch_state(g_app_state);
     }
 
     boot_count++;

@@ -10,6 +10,13 @@
 static const char *TAG_WIFI = "wifi";
 #define LED_PIN GPIO_NUM_3
 
+struct WifiCredential {
+    const char* ssid;
+    const char* password;
+};
+
+static const WifiCredential wifi_list[] = { WIFI_NETWORKS };
+
 static void led_init(void)
 {
     gpio_config_t cfg = {};
@@ -33,6 +40,60 @@ void wifi_led_write(bool on)
 
 EventGroupHandle_t wifi_event_group = NULL;
 
+void wifi_connect_best(void)
+{
+    if (WiFi.status() == WL_CONNECTED) return;
+
+    int n = WiFi.scanNetworks();
+    if (n < 0) {
+        ESP_LOGW(TAG_WIFI, "Scan failed: %d", n);
+        return;
+    }
+
+    int best_idx = -1;
+    int best_rssi = -999;
+    const char* best_pass = NULL;
+
+    for (int i = 0; i < n; i++) {
+        String ssid = WiFi.SSID(i);
+        int rssi = WiFi.RSSI(i);
+
+        for (int j = 0; j < WIFI_NETWORK_COUNT; j++) {
+            if (ssid == wifi_list[j].ssid) {
+                if (rssi > best_rssi) {
+                    best_rssi = rssi;
+                    best_idx = i;
+                    best_pass = wifi_list[j].password;
+                }
+                break;
+            }
+        }
+    }
+
+    if (best_idx < 0) {
+        ESP_LOGW(TAG_WIFI, "No known network found (%d scanned)", n);
+        WiFi.scanDelete();
+        return;
+    }
+
+    String best_ssid = WiFi.SSID(best_idx);
+    Serial.printf("WiFi: connecting to %s (RSSI: %d dBm)...\n", best_ssid.c_str(), best_rssi);
+
+    WiFi.scanDelete();
+    WiFi.begin(best_ssid.c_str(), best_pass);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("WiFi: connected to %s  IP: %s\n", best_ssid.c_str(), WiFi.localIP().toString().c_str());
+    } else {
+        Serial.printf("WiFi: failed to connect to %s\n", best_ssid.c_str());
+    }
+}
+
 void wifi_init(void)
 {
     led_init();
@@ -40,9 +101,7 @@ void wifi_init(void)
     xEventGroupSetBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
 
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-    Serial.printf("WiFi: connecting to %s (async)...\n", WIFI_SSID);
+    wifi_connect_best();
 }
 
 bool wifi_is_connected(void)
@@ -68,7 +127,7 @@ void wifi_task(void *arg)
                 xEventGroupSetBits(wifi_event_group, WIFI_BIT_DISCONNECTED);
                 Serial.printf("WiFi disconnected.\n");
             }
-            WiFi.reconnect();
+            wifi_connect_best();
         }
 
         if (lvgl_lock(100)) {
