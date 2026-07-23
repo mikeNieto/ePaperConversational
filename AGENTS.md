@@ -27,8 +27,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - `wifi_task` (2, 4KB) — WiFi scan-and-connect loop: scans for known networks, picks strongest RSSI
   - `bat_task` (1, 4KB) — periodic battery voltage read + status bar update
   - `sleep_timer` (1, 4KB) — inactivity timer (60s), skips during LISTENING/RECEIVING/RESPONSE(when playing)
-- **State machine**: `AppState` enum with 5 states (`STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4`), driven by `AppEvent` struct (`type` + `data`) on `state_queue`
-- **Event types**: `EVT_WS_CONNECTED`(1) `EVT_WS_DISCONNECTED`(2) `EVT_WS_ERROR`(3) `EVT_START_RECORDING`(4) `EVT_STOP_RECORDING`(5) `EVT_RECORDING_DONE`(6) `EVT_RESPONSE_READY`(7) `EVT_NEXT_MESSAGE`(8) `EVT_WS_RECONNECT`(9) `EVT_DISCARD`(10)
+- **State machine**: `AppState` enum with 6 states (`STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4, STATE_SETTINGS=5`), driven by `AppEvent` struct (`type` + `data`) on `state_queue`
+- **Event types**: `EVT_WS_CONNECTED`(1) `EVT_WS_DISCONNECTED`(2) `EVT_WS_ERROR`(3) `EVT_START_RECORDING`(4) `EVT_STOP_RECORDING`(5) `EVT_RECORDING_DONE`(6) `EVT_RESPONSE_READY`(7) `EVT_NEXT_MESSAGE`(8) `EVT_WS_RECONNECT`(9) `EVT_DISCARD`(10) `EVT_OPEN_SETTINGS`(11) `EVT_TOGGLE_LANGUAGE`(12) `EVT_EXIT_SETTINGS`(13)
 - **LVGL v8.4**: widget-based UI, 200x200 e-paper display, `full_refresh = 1` always
   - **Mandatory**: lock LVGL mutex (`lvgl_lock(-1)` / `lvgl_unlock()`) before any widget operation from any task
   - Screens: `lv_obj_create(NULL)` → build widgets → `lv_scr_load()` → `lv_timer_handler()` → `lv_obj_del(old_scr)`
@@ -63,7 +63,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - **Cleanup on error/disconnect**: `STATE_RECEIVING` handlers call `audio_play_wav_stop()` + `ws_free_audio_buffer()` (frees ring buffer via `stream_buf_free()`) before transitioning
   - **Config constants** (`user_config.h`): `STREAM_BUF_SIZE` (524288), `STREAM_MIN_FILL_BYTES` (24000), `STREAM_TIMEOUT_MS` (10000)
 
-- **Deep sleep**: `RTC_DATA_ATTR` vars: `boot_count`, `sleep_counter` (no UUID persistence in current code)
+- **Deep sleep**: `RTC_DATA_ATTR` vars: `boot_count`, `sleep_counter`, `g_lang_index` (language index for multi-language persistence)
   - Wake causes: `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (60 min)
   - Two entry paths: `enter_deep_sleep()` (full EPD refresh + `EPD_Display()`) and `enter_deep_sleep_light()` (no display refresh, used for timer auto-wake)
   - `rtc_gpio_hold_en(GPIO_NUM_17)` to keep VBAT powered
@@ -75,15 +75,17 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
 - Button events via `EventGroupHandle_t` (`boot_groups`, `pwr_groups`) — use `BTN_GET(ev, BIT)` with `BOOT_BIT_SINGLE/LONG/UP/DOUBLE` and `PWR_BIT_SINGLE/LONG/UP/DOUBLE`
   - **Watch out**: PWR bits have different order than BOOT (`PWR_BIT_DOUBLE=2` vs `BOOT_BIT_UP=2`, `PWR_BIT_UP=3` vs `BOOT_BIT_DOUBLE=3`)
 - Button behavior per state:
-  - `STATE_RECORD`: BOOT single → `EVT_START_RECORDING`; PWR single → deep sleep (immediate, not queue)
+  - **Global**: PWR long → deep sleep (any state, overrides per-state behavior)
+  - `STATE_RECORD`: BOOT single → `EVT_START_RECORDING`; PWR single → `EVT_OPEN_SETTINGS`
   - `STATE_LISTENING`: BOOT single → `EVT_STOP_RECORDING`; PWR single → `EVT_DISCARD`
   - `STATE_RESPONSE`: BOOT single → `EVT_NEXT_MESSAGE` (continues conversation); PWR single → `EVT_WS_RECONNECT`
+  - `STATE_SETTINGS`: BOOT single → `EVT_TOGGLE_LANGUAGE` (rotates language); PWR single → `EVT_EXIT_SETTINGS` (back to RECORD)
   - `STATE_CONNECTING` and `STATE_RECEIVING`: buttons have no effect
 - Touch behavior per state: `STATE_RECORD` → sends `EVT_START_RECORDING`; `STATE_LISTENING` → sends `EVT_STOP_RECORDING`
 - Audio recording: 16kHz 16-bit stereo, max 30 seconds (~1.92MB PSRAM buffer). Auto-discards on timeout (`EVT_RECORDING_DONE` with empty buffer → back to RECORD). Recording runs in a FreeRTOS task (`rec_task_handle`).
 - Partial refresh (`EPD_DisplayPart()`) for normal operation; full refresh (`EPD_Display()` after `EPD_Init()`) only in `enter_deep_sleep()` before deep sleep
 - Touch detection: runtime-probed via I2C at `0x38` (FT6336), flag `hasTouch` set; `touch_task` only created if `hasTouch == true`
-- Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`)
+- Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`). Runs normally in `STATE_SETTINGS` (will deep sleep after 60s idle).
 - **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
 - **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
 - **Multi-WiFi**: `WIFI_NETWORKS` macro in `user_config_secrets.h` defines a list of `{ "SSID", "password" }` pairs with `WIFI_NETWORK_COUNT`. On boot and every disconnect, `wifi_connect_best()` scans all visible APs, filters to known SSIDs, picks the one with strongest RSSI (dBm), and connects via `WiFi.begin()`. Has a guard at the top (`if (WiFi.status() == WL_CONNECTED) return;`) to prevent re-scanning while connected (avoids WS drop from transient status flickers). **Synchronous/blocking**: `wifi_init()` calls `wifi_connect_best()` which blocks up to `WIFI_CONNECT_TIMEOUT_MS` (10s) waiting for connection — unlike old async `WiFi.begin()`. `wifi_task` calls `wifi_connect_best()` on every disconnect (replacing old `WiFi.reconnect()`). Falls back to rescan every 5s if no known networks are in range.
@@ -107,6 +109,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
     - Wake beep: `setup()` (EXT1/other wake) sets `g_play_wake_beep = true` **before** `user_app_init()` → `state_task` on `EVT_WS_CONNECTED` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)` → `g_play_wake_beep = false` → `switch_state(STATE_RECORD)`. Only plays on wake-from-sleep, not on first boot or WS reconnects. Flag must be set before tasks start to avoid race with `EVT_WS_CONNECTED`.
   - Helper functions: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
 
+- **Multi-language (i18n)**: `LangMessages` struct in `messages.h` with `name` field (self-describing) + 15 display string fields. Two language tables defined: `MSG_ES` (Spanish) and `MSG_EN` (English). Global pointer `currentLang` set by `lang_init()` (called at top of `setup()`) based on `RTC_DATA_ATTR g_lang_index`. `lang_toggle()` rotates through `lang_table[]` array — to add a new language, define `MSG_XX`, declare `extern`, and append to `lang_table[]` (auto-count via `sizeof`). Settings screen shows current language name via `lang_get_name()`. Language persists across deep sleep. All UI screens and status bar read strings via `currentLang->field_name`.
+
 ## Config and secrets
 
 Configuration is split into two files:
@@ -129,11 +133,12 @@ Configuration is split into two files:
 | `src/battery/` | ADC battery voltage measurement |
 | `src/codec_board/` | ES8311 codec init (wraps `esp_codec_dev`) |
 | `src/esp_codec_dev/` | External codec library (v1.3.5, ESP-IDF component) |
-| `src/ui/screens.cpp` | 6 screen creation functions + receiving status updater |
+| `src/ui/screens.cpp` | 7 screen creation functions + receiving status updater + settings screen |
 | `src/ui/status_bar.cpp` | WiFi + battery status bar widget |
 | `audio_stream.h` / `audio_stream.cpp` | Streaming ring buffer: 512KB PSRAM circular buffer with blocking writes + binary semaphore backpressure |
 | `ws_client.h` / `ws_client.cpp` | WebSocket client: connect, send/receive, JSON parsing, audio buffer mgmt, streaming protocol handling |
 | `audio_bsp.h` / `audio_bsp.cpp` | ES8311 codec control, recording task, WAV/PCM playback tasks, streaming playback init |
+| `messages.h` / `messages.cpp` | Multi-language string tables (`MSG_ES`, `MSG_EN`), `RTC_DATA_ATTR g_lang_index`, `lang_init()`/`lang_toggle()` for runtime language switching persisting across deep sleep |
 | `user_config.h` | All non-secret configuration constants including streaming params |
 | `specs/` | TechnicalSpec.md and ImplementationPlan.md (design docs — **note: architecture has diverged**; spec describes REST API but code uses WebSocket) |
 
@@ -141,13 +146,19 @@ Configuration is split into two files:
 
 ```
 CONNECTING ──[WS connected]──▶ RECORD ──[start recording]──▶ LISTENING
-    ▲                              ▲                              │
-    │                              │                     [stop/done + valid WAV]
-    │  [WS disconnect from         │                              ▼
+    ▲                              ▲         │                    │
+    │                              │         │           [stop/done + valid WAV]
+    │  [WS disconnect from         │         │                    ▼
     │   RECORD/LISTENING/          │◀──[empty WAV]─── RECEIVING ──[response ready]──▶ RESPONSE
-    │   RECEIVING/RESPONSE]        │                                  │
-    └──────────────────────────────┘      [WS error] ────────────────┘
-                                         [WS disconnect]
+    │   RECEIVING/RESPONSE/        │         │                        │
+    │   SETTINGS]                  │    [WS error] ──────────────────┘
+    │                              │    [WS disconnect]
+    │                              │
+    └──────────────────────────────┘
+    
+    RECORD ──[PWR single]──▶ SETTINGS
+    SETTINGS ──[PWR single]──▶ RECORD
+    SETTINGS ──[BOOT single]──▶ SETTINGS (toggle language, re-render)
 
 RESPONSE ──[next message]──▶ LISTENING (continue conversation)
 RESPONSE ──[reconnect]───▶ CONNECTING
