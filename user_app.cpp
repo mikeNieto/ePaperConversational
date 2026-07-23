@@ -88,6 +88,8 @@ void switch_state(AppState new_state)
         new_scr = create_screen_receiving();
     } else if (new_state == STATE_RESPONSE) {
         new_scr = create_screen_6_response(g_agent_text);
+    } else if (new_state == STATE_SETTINGS) {
+        new_scr = create_screen_settings(wifi_get_ssid(), lang_get_name());
     }
 
     if (new_scr) {
@@ -136,6 +138,8 @@ static void state_task(void *arg)
                     switch_state(STATE_LISTENING);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
                     switch_state(STATE_CONNECTING);
+                } else if (evt.type == EVT_OPEN_SETTINGS) {
+                    switch_state(STATE_SETTINGS);
                 }
             } else if (g_app_state == STATE_LISTENING) {
                 if (evt.type == EVT_STOP_RECORDING) {
@@ -167,7 +171,7 @@ static void state_task(void *arg)
                 } else if (evt.type == EVT_WS_ERROR) {
                     audio_play_wav_stop();
                     ws_free_audio_buffer();
-                    show_error_message(currentLang->error_conexion, 2000);
+                    show_error_message(currentLang->connection_error, 2000);
                     switch_state(STATE_RECORD);
                 } else if (evt.type == EVT_WS_DISCONNECTED) {
                     audio_play_wav_stop();
@@ -190,6 +194,15 @@ static void state_task(void *arg)
                         ws_free_audio_buffer();
                         switch_state(STATE_CONNECTING);
                     }
+                }
+            } else if (g_app_state == STATE_SETTINGS) {
+                if (evt.type == EVT_TOGGLE_LANGUAGE) {
+                    lang_toggle();
+                    switch_state(STATE_SETTINGS);
+                } else if (evt.type == EVT_EXIT_SETTINGS) {
+                    switch_state(STATE_RECORD);
+                } else if (evt.type == EVT_WS_DISCONNECTED) {
+                    switch_state(STATE_CONNECTING);
                 }
             }
         }
@@ -340,6 +353,19 @@ void button_task(void *arg)
 
         if (boot_ev || pwr_ev) activity_feed();
 
+        if (BTN_GET(pwr_ev, PWR_BIT_LONG)) {
+            Serial.printf("PWR long: entering deep sleep\n");
+            if (lvgl_lock(1000)) {
+                status_bar_set_visible(false);
+                lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
+                lv_scr_load(s0);
+                lv_timer_handler();
+                lvgl_unlock();
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            enter_deep_sleep();
+        }
+
         if (g_app_state == STATE_CONNECTING) {
         } else if (g_app_state == STATE_RECORD) {
             if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
@@ -347,16 +373,8 @@ void button_task(void *arg)
                 xQueueSend(state_queue, &evt, 0);
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
-                Serial.printf("PWR in RECORD: entering deep sleep\n");
-                if (lvgl_lock(1000)) {
-                    status_bar_set_visible(false);
-                    lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
-                    lv_scr_load(s0);
-                    lv_timer_handler();
-                    lvgl_unlock();
-                }
-                vTaskDelay(pdMS_TO_TICKS(500));
-                enter_deep_sleep();
+                AppEvent evt = { EVT_OPEN_SETTINGS, 0 };
+                xQueueSend(state_queue, &evt, 0);
             }
         } else if (g_app_state == STATE_LISTENING) {
             if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
@@ -375,6 +393,15 @@ void button_task(void *arg)
             }
             if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
                 AppEvent evt = { EVT_WS_RECONNECT, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+        } else if (g_app_state == STATE_SETTINGS) {
+            if (BTN_GET(boot_ev, BOOT_BIT_SINGLE)) {
+                AppEvent evt = { EVT_TOGGLE_LANGUAGE, 0 };
+                xQueueSend(state_queue, &evt, 0);
+            }
+            if (BTN_GET(pwr_ev, PWR_BIT_SINGLE)) {
+                AppEvent evt = { EVT_EXIT_SETTINGS, 0 };
                 xQueueSend(state_queue, &evt, 0);
             }
         }

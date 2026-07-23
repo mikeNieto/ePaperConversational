@@ -168,14 +168,14 @@ static void onMessageCallback(WebsocketsMessage message)
         const char* state = parse_status_state(payload);
         if (lvgl_lock(200)) {
             if (strcmp(state, "transcribing") == 0) {
-                update_screen_receiving_status(currentLang->transcribiendo);
+                update_screen_receiving_status(currentLang->transcribing);
             } else if (strcmp(state, "thinking") == 0) {
-                update_screen_receiving_status(currentLang->pensando);
+                update_screen_receiving_status(currentLang->thinking);
             } else if (strcmp(state, "speaking") == 0) {
                 if (agent_text_len > 0) {
                     update_screen_receiving_status(agent_text);
                 } else {
-                    update_screen_receiving_status(currentLang->hablando);
+                    update_screen_receiving_status(currentLang->speaking);
                 }
             }
             lvgl_unlock();

@@ -2,6 +2,7 @@
 #include "esp_sleep.h"
 #include "src/ui/status_bar.h"
 #include "esp_heap_caps.h"
+#include "messages.h"
 
 extern RTC_DATA_ATTR int boot_count;
 extern RTC_DATA_ATTR int sleep_counter;
@@ -9,6 +10,7 @@ extern RTC_DATA_ATTR int sleep_counter;
 void setup()
 {
     heap_caps_malloc_extmem_enable(256);
+    lang_init();
 
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 

@@ -20,7 +20,7 @@ lv_obj_t* create_screen_0_deep_sleep(int sleep_counter)
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* label = lv_label_create(screen);
-    lv_label_set_text_fmt(label, "%s %d", currentLang->durmiendo, sleep_counter);
+    lv_label_set_text_fmt(label, "%s %d", currentLang->sleeping, sleep_counter);
     lv_obj_center(label);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
@@ -35,7 +35,7 @@ lv_obj_t* create_screen_connecting(void)
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
-    center_label(screen, currentLang->conectando);
+    center_label(screen, currentLang->connecting);
 
     return screen;
 }
@@ -48,7 +48,7 @@ lv_obj_t* create_screen_2_record(void)
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
-    center_label(screen, currentLang->grabar_mensaje);
+    center_label(screen, currentLang->record_message);
 
     return screen;
 }
@@ -61,7 +61,36 @@ lv_obj_t* create_screen_2b_listening(void)
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
-    center_label(screen, currentLang->escuchando);
+    center_label(screen, currentLang->listening);
+
+    return screen;
+}
+
+lv_obj_t* create_screen_settings(const char* ssid, const char* lang_name)
+{
+    lv_obj_t* screen = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+
+    create_status_bar(screen);
+
+    lv_obj_t* title = lv_label_create(screen);
+    lv_label_set_text(title, currentLang->settings);
+    lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
+    lv_obj_set_width(title, lv_pct(100));
+    lv_obj_set_pos(title, 0, STATUS_BAR_H + 8);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+
+    lv_obj_t* wifi = lv_label_create(screen);
+    lv_label_set_text_fmt(wifi, "%s: %s", currentLang->wifi_label, ssid);
+    lv_obj_set_pos(wifi, 10, STATUS_BAR_H + 42);
+    lv_obj_set_style_text_font(wifi, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+
+    lv_obj_t* lang = lv_label_create(screen);
+    lv_label_set_text_fmt(lang, "%s: %s", currentLang->language, lang_name);
+    lv_obj_set_pos(lang, 10, STATUS_BAR_H + 64);
+    lv_obj_set_style_text_font(lang, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     return screen;
 }
@@ -91,7 +120,7 @@ lv_obj_t* create_screen_receiving(void)
     lv_label_set_long_mode(receiving_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(receiving_label, lv_pct(100));
     lv_obj_set_style_text_align(receiving_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
-    lv_label_set_text(receiving_label, currentLang->transcribiendo);
+    lv_label_set_text(receiving_label, currentLang->transcribing);
     lv_obj_set_style_text_font(receiving_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     return screen;

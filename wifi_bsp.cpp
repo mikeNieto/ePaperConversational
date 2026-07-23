@@ -38,6 +38,17 @@ void wifi_led_write(bool on)
     led_set(on);
 }
 
+const char* wifi_get_ssid(void)
+{
+    static String ssid_buf;
+    if (WiFi.status() == WL_CONNECTED) {
+        ssid_buf = WiFi.SSID();
+    } else {
+        ssid_buf = "--";
+    }
+    return ssid_buf.c_str();
+}
+
 EventGroupHandle_t wifi_event_group = NULL;
 
 void wifi_connect_best(void)

@@ -33,13 +33,17 @@ typedef struct {
 #define EVT_NEXT_MESSAGE      8
 #define EVT_WS_RECONNECT      9
 #define EVT_DISCARD           10
+#define EVT_OPEN_SETTINGS     11
+#define EVT_TOGGLE_LANGUAGE   12
+#define EVT_EXIT_SETTINGS     13
 
 typedef enum {
     STATE_CONNECTING = 0,
     STATE_RECORD = 1,
     STATE_LISTENING = 2,
     STATE_RECEIVING = 3,
-    STATE_RESPONSE = 4
+    STATE_RESPONSE = 4,
+    STATE_SETTINGS = 5
 } AppState;
 
 extern AppState g_app_state;

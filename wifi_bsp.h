@@ -18,6 +18,7 @@ bool wifi_is_connected(void);
 void wifi_connect_best(void);
 void wifi_task(void *arg);
 void wifi_led_write(bool on);
+const char* wifi_get_ssid(void);
 
 #ifdef __cplusplus
 }
