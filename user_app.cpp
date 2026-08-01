@@ -41,9 +41,56 @@ AppState g_app_state = STATE_CONNECTING;
 bool g_play_wake_beep = false;
 char g_agent_text[AGENT_TEXT_SIZE] = {0};
 
-static lv_coord_t last_touch_x = 0;
-static lv_coord_t last_touch_y = 0;
-static bool last_touch_pressed = false;
+static volatile lv_coord_t last_touch_x = 0;
+static volatile lv_coord_t last_touch_y = 0;
+static volatile bool last_touch_pressed = false;
+
+struct TouchSample {
+    lv_coord_t x;
+    lv_coord_t y;
+    bool pressed;
+};
+
+static const uint8_t TOUCH_SAMPLE_QUEUE_SIZE = 32;
+static TouchSample touch_samples[TOUCH_SAMPLE_QUEUE_SIZE];
+static uint8_t touch_sample_read = 0;
+static uint8_t touch_sample_write = 0;
+static portMUX_TYPE touch_sample_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void touch_sample_push(lv_coord_t x, lv_coord_t y, bool pressed)
+{
+    portENTER_CRITICAL(&touch_sample_mux);
+    uint8_t next = (uint8_t)((touch_sample_write + 1) % TOUCH_SAMPLE_QUEUE_SIZE);
+    if (next == touch_sample_read) {
+        /* Keep the newest movement and release event if LVGL is busy refreshing. */
+        touch_sample_read = (uint8_t)((touch_sample_read + 1) % TOUCH_SAMPLE_QUEUE_SIZE);
+    }
+    touch_samples[touch_sample_write] = {x, y, pressed};
+    touch_sample_write = next;
+    portEXIT_CRITICAL(&touch_sample_mux);
+}
+
+static bool touch_sample_pop(TouchSample* sample)
+{
+    bool has_sample = false;
+    portENTER_CRITICAL(&touch_sample_mux);
+    if (touch_sample_read != touch_sample_write) {
+        *sample = touch_samples[touch_sample_read];
+        touch_sample_read = (uint8_t)((touch_sample_read + 1) % TOUCH_SAMPLE_QUEUE_SIZE);
+        has_sample = true;
+    }
+    portEXIT_CRITICAL(&touch_sample_mux);
+    return has_sample;
+}
+
+static bool touch_samples_pending(void)
+{
+    bool pending;
+    portENTER_CRITICAL(&touch_sample_mux);
+    pending = touch_sample_read != touch_sample_write;
+    portEXIT_CRITICAL(&touch_sample_mux);
+    return pending;
+}
 
 QueueHandle_t state_queue = NULL;
 
@@ -274,9 +321,17 @@ static void lvgl_port_task(void *arg)
 
 static void lvgl_touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data)
 {
-    data->point.x = last_touch_x;
-    data->point.y = last_touch_y;
-    data->state = last_touch_pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+    TouchSample sample;
+    if (touch_sample_pop(&sample)) {
+        data->point.x = sample.x;
+        data->point.y = sample.y;
+        data->state = sample.pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+    } else {
+        data->point.x = last_touch_x;
+        data->point.y = last_touch_y;
+        data->state = last_touch_pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+    }
+    data->continue_reading = touch_samples_pending();
 }
 
 void lvgl_port_init(void)
@@ -315,6 +370,7 @@ void lvgl_port_init(void)
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = lvgl_touch_read_cb;
+    indev_drv.scroll_limit = 2;
     lv_indev_drv_register(&indev_drv);
 
     esp_timer_create_args_t lvgl_tick_timer_args = {};
@@ -471,22 +527,51 @@ void touch_task(void *arg)
 {
     I2cFt6336Dev *ft6336 = I2cFt6336Dev::instance_;
     uint32_t io_num;
+    bool was_pressed = false;
+    uint8_t missed_touch_reads = 0;
+    lv_coord_t previous_x = 0;
+    lv_coord_t previous_y = 0;
     for (;;) {
-        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+        /* Poll as well as consuming the interrupt. This guarantees a release
+         * is reported even when the controller emits only one interrupt. */
+        xQueueReceive(gpio_evt_queue, &io_num, pdMS_TO_TICKS(10));
+
+        uint16_t x, y;
+        bool pressed = ft6336->GetTouchPoint(&x, &y);
+        if (pressed) {
+            missed_touch_reads = 0;
+            last_touch_x = (lv_coord_t)x;
+            last_touch_y = (lv_coord_t)y;
+            last_touch_pressed = true;
+            if (!was_pressed || previous_x != (lv_coord_t)x || previous_y != (lv_coord_t)y) {
+                touch_sample_push((lv_coord_t)x, (lv_coord_t)y, true);
+            }
+            xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
             activity_feed();
-            uint16_t x, y;
-            if (ft6336->GetTouchPoint(&x, &y)) {
-                last_touch_x = (lv_coord_t)x;
-                last_touch_y = (lv_coord_t)y;
-                last_touch_pressed = true;
-                xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
+            if (!was_pressed) {
                 Serial.printf("Touch: (%d,%d)\n", x, y);
                 Serial.flush();
-                activity_feed();
+            }
+        } else {
+            if (was_pressed && missed_touch_reads < 3) {
+                /* Ignore an occasional empty FT6336 report while dragging. */
+                missed_touch_reads++;
+                last_touch_pressed = true;
             } else {
                 last_touch_pressed = false;
+                if (was_pressed) {
+                    touch_sample_push(previous_x, previous_y, false);
+                    activity_feed();
+                }
+                missed_touch_reads = 0;
+                was_pressed = false;
             }
         }
+        if (pressed) {
+            previous_x = (lv_coord_t)x;
+            previous_y = (lv_coord_t)y;
+        }
+        if (pressed) was_pressed = true;
     }
 }
 

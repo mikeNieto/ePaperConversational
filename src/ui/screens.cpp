@@ -16,6 +16,17 @@ static volatile bool receiving_status_ready = false;
 static bool receiving_status_pending = false;
 static char pending_receiving_status[AGENT_TEXT_SIZE] = {0};
 
+static void configure_text_scroll(lv_obj_t* cont)
+{
+    lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLL_MOMENTUM |
+                            LV_OBJ_FLAG_SCROLL_ELASTIC |
+                            LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
+                            LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+}
+
 static void receiving_status_timer_cb(lv_timer_t* timer)
 {
     (void)timer;
@@ -29,6 +40,7 @@ static void receiving_status_timer_cb(lv_timer_t* timer)
     bool has_pending = receiving_status_pending;
     if (has_pending) {
         lv_label_set_text(receiving_label, pending_receiving_status);
+        lv_obj_update_layout(lv_obj_get_parent(receiving_label));
         receiving_status_pending = false;
     }
     xSemaphoreGive(receiving_status_mutex);
@@ -171,15 +183,16 @@ lv_obj_t* create_screen_receiving(void)
     lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
-    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    configure_text_scroll(cont);
 
     receiving_label = lv_label_create(cont);
     lv_label_set_long_mode(receiving_label, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(receiving_label, lv_pct(100));
+    lv_obj_set_height(receiving_label, LV_SIZE_CONTENT);
     lv_obj_set_style_text_align(receiving_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(receiving_label, currentLang->transcribing);
     lv_obj_set_style_text_font(receiving_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_update_layout(cont);
 
     receiving_status_clear_pending();
     if (!receiving_status_timer) {
@@ -224,8 +237,7 @@ lv_obj_t* create_screen_6_response(const char* agentText)
     lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
-    lv_obj_set_scroll_dir(cont, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
+    configure_text_scroll(cont);
 
     lv_obj_t* label = lv_label_create(cont);
     lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
@@ -233,6 +245,8 @@ lv_obj_t* create_screen_6_response(const char* agentText)
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(label, agentText);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_height(label, LV_SIZE_CONTENT);
+    lv_obj_update_layout(cont);
 
     return screen;
 }
