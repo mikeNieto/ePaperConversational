@@ -41,34 +41,126 @@ typedef struct {
 
 static QueueHandle_t ws_cmd_queue = NULL;
 
+static int json_hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool json_parse_hex4(const char* str, uint32_t* value)
+{
+    uint32_t result = 0;
+    for (int i = 0; i < 4; i++) {
+        if (str[i] == '\0') return false;
+        int digit = json_hex_value(str[i]);
+        if (digit < 0) return false;
+        result = (result << 4) | (uint32_t)digit;
+    }
+    *value = result;
+    return true;
+}
+
+static bool json_append_codepoint(char* out, size_t out_max, size_t* out_len, uint32_t codepoint)
+{
+    if (codepoint >= 0xD800 && codepoint <= 0xDFFF) codepoint = 0xFFFD;
+    if (codepoint > 0x10FFFF) codepoint = 0xFFFD;
+
+    uint8_t encoded[4];
+    size_t encoded_len;
+    if (codepoint <= 0x7F) {
+        encoded[0] = (uint8_t)codepoint;
+        encoded_len = 1;
+    } else if (codepoint <= 0x7FF) {
+        encoded[0] = (uint8_t)(0xC0 | (codepoint >> 6));
+        encoded[1] = (uint8_t)(0x80 | (codepoint & 0x3F));
+        encoded_len = 2;
+    } else if (codepoint <= 0xFFFF) {
+        encoded[0] = (uint8_t)(0xE0 | (codepoint >> 12));
+        encoded[1] = (uint8_t)(0x80 | ((codepoint >> 6) & 0x3F));
+        encoded[2] = (uint8_t)(0x80 | (codepoint & 0x3F));
+        encoded_len = 3;
+    } else {
+        encoded[0] = (uint8_t)(0xF0 | (codepoint >> 18));
+        encoded[1] = (uint8_t)(0x80 | ((codepoint >> 12) & 0x3F));
+        encoded[2] = (uint8_t)(0x80 | ((codepoint >> 6) & 0x3F));
+        encoded[3] = (uint8_t)(0x80 | (codepoint & 0x3F));
+        encoded_len = 4;
+    }
+
+    if (*out_len + encoded_len >= out_max) return false;
+    memcpy(out + *out_len, encoded, encoded_len);
+    *out_len += encoded_len;
+    out[*out_len] = '\0';
+    return true;
+}
+
 static void parse_json_string(const char* str, const char* key, char* out, size_t out_max)
 {
     out[0] = '\0';
-    if (out_max == 0) return;
+    if (!str || !key || out_max == 0) return;
 
     char search[64];
-    int search_len = snprintf(search, sizeof(search), "\"%s\":\"", key);
+    int search_len = snprintf(search, sizeof(search), "\"%s\"", key);
     if (search_len < 0 || search_len >= (int)sizeof(search)) return;
 
-    const char* start = strstr(str, search);
-    if (!start) return;
-    start += search_len;
+    const char* cursor = strstr(str, search);
+    if (!cursor) return;
+    cursor += search_len;
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') cursor++;
+    if (*cursor != ':') return;
+    cursor++;
+    while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') cursor++;
+    if (*cursor != '"') return;
+    cursor++;
 
-    const char* end = strchr(start, '"');
-    if (!end) return;
-
-    size_t len = (size_t)(end - start);
-    if (len == 0) return;
-    if (len >= out_max) len = out_max - 1;
-    memcpy(out, start, len);
-    out[len] = '\0';
-
-    for (int i = 0; out[i]; i++) {
-        if (out[i] == '\\') {
-            if (out[i + 1] == 'n') { out[i] = '\n'; memmove(out + i + 1, out + i + 2, strlen(out + i + 2) + 1); }
-            else if (out[i + 1] == 't') { out[i] = '\t'; memmove(out + i + 1, out + i + 2, strlen(out + i + 2) + 1); }
-            else if (out[i + 1] == '"') { out[i] = '"'; memmove(out + i + 1, out + i + 2, strlen(out + i + 2) + 1); }
+    size_t out_len = 0;
+    while (*cursor && *cursor != '"') {
+        uint32_t codepoint;
+        if (*cursor != '\\') {
+            if (out_len + 1 >= out_max) return;
+            out[out_len++] = *cursor++;
+            out[out_len] = '\0';
+            continue;
         }
+
+        cursor++;
+        if (*cursor == '\0') {
+            json_append_codepoint(out, out_max, &out_len, '\\');
+            return;
+        }
+
+        char escaped = *cursor++;
+        switch (escaped) {
+            case '"': codepoint = '"'; break;
+            case '\\': codepoint = '\\'; break;
+            case '/': codepoint = '/'; break;
+            case 'b': codepoint = '\b'; break;
+            case 'f': codepoint = '\f'; break;
+            case 'n': codepoint = '\n'; break;
+            case 'r': codepoint = '\r'; break;
+            case 't': codepoint = '\t'; break;
+            case 'u': {
+                if (!json_parse_hex4(cursor, &codepoint)) return;
+                cursor += 4;
+                if (codepoint >= 0xD800 && codepoint <= 0xDBFF &&
+                    cursor[0] == '\\' && cursor[1] == 'u') {
+                    uint32_t low;
+                    if (json_parse_hex4(cursor + 2, &low) && low >= 0xDC00 && low <= 0xDFFF) {
+                        codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                        cursor += 6;
+                    }
+                }
+                break;
+            }
+            default:
+                /* Preserve malformed escapes instead of silently truncating the text. */
+                if (!json_append_codepoint(out, out_max, &out_len, '\\')) return;
+                codepoint = (uint8_t)escaped;
+                break;
+        }
+        if (!json_append_codepoint(out, out_max, &out_len, codepoint)) return;
     }
 }
 
@@ -215,6 +307,9 @@ static void onMessageCallback(WebsocketsMessage message)
     } else if (parse_json_has_type(payload, "done")) {
         waiting_response = false;
         memcpy(g_agent_text, agent_text, sizeof(g_agent_text));
+        Serial.printf("WS: response text length=%u%s\n",
+                      (unsigned int)agent_text_len,
+                      agent_text_len >= sizeof(agent_text) - 1 ? " (buffer limit)" : "");
         send_event({EVT_RESPONSE_READY, 0});
     } else if (parse_json_has_type(payload, "error")) {
         char err[128];
