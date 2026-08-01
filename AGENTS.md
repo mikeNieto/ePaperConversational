@@ -41,10 +41,11 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - Client sends: binary WAV audio + `{"type":"audio_end"}` text message
   - **Streaming audio protocol** (backend → client):
     - `{"type":"audio_start","sample_rate":24000,"channels":1,"bits":16}` — begins a PCM stream. Client creates a 512KB PSRAM ring buffer and spawns `stream_playback_task` (priority 5)
-    - Binary PCM chunks (typically 32KB each) — client writes to ring buffer via `stream_buf_write()`. Blocks with 5s timeout if buffer is full (backpressure via TCP window)
+    - Binary PCM chunks (typically 32KB each) — client writes to ring buffer via `stream_buf_write()`. Blocks with `STREAM_TIMEOUT_MS` (10s) if buffer is full (backpressure via TCP window)
     - `{"type":"audio_end"}` — signals end of stream. Client calls `stream_buf_signal_end()`. Playback task drains remaining data and closes codec
     - `{"type":"done"}` — triggers `EVT_RESPONSE_READY`, transitions UI to `STATE_RESPONSE` (audio may already be playing or finished)
     - **Backend must send chunks at real-time speed** (~48KB/s for 24000Hz mono 16-bit), interleaving text JSON messages between binary chunks. Burst sends will cause TCP backpressure blocking
+    - Receiving text is coalesced by an LVGL timer so UI refreshes do not block PCM reception
   - Thread-safe via `ws_cmd_queue` (FreeRTOS queue of `WsCmd` struct)
   - **No ArduinoJson** — JSON parsed with hand-rolled `parse_json_string()` via `String::indexOf` (requires Arduino's String class)
   - `WiFi.setSleep(false)` in `ws_task` to keep radio alive
@@ -55,10 +56,10 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - **Playback task** (`stream_playback_task`, priority 5): spawned by `audio_stream_playback_start()` when `audio_start` JSON arrives
     - Waits for min fill threshold (`STREAM_MIN_FILL_BYTES` = 24KB, ~0.5s) or `audio_end` signal
     - Opens ES8311 codec at the specified sample rate/channels/bits
-    - Reads 4KB chunks from ring buffer, writes to codec, yields 1ms between successful writes (gives `ws_task` priority 3 time to run)
+    - Reads 1KB frame-aligned chunks from ring buffer and retries transient codec/I2S write errors; the blocking I2S write gives `ws_task` priority 3 time to run without an extra fixed delay
     - On `stream_buf_is_ended()` + empty buffer: closes codec, frees ring buffer, sets `wav_playing = false`
     - On `wav_stop_flag`: aborts immediately (triggered by `audio_play_wav_stop()`)
-    - Timeout: aborts if no data for `STREAM_TIMEOUT_MS` (10s) from last successful read
+    - Timeout: aborts if no data for `STREAM_TIMEOUT_MS` (10s) from last successful codec write
   - **Fallback path**: if backend sends a single binary WAV/PCM without `audio_start`/`audio_end` protocol, `switch_state(STATE_RESPONSE)` checks `!audio_wav_is_playing()` and falls back to `audio_play_wav_start()`/`audio_play_pcm_start()` with the old full-buffer approach
   - **Cleanup on error/disconnect**: `STATE_RECEIVING` handlers call `audio_play_wav_stop()` + `ws_free_audio_buffer()` (frees ring buffer via `stream_buf_free()`) before transitioning
   - **Config constants** (`user_config.h`): `STREAM_BUF_SIZE` (524288), `STREAM_MIN_FILL_BYTES` (24000), `STREAM_TIMEOUT_MS` (10000)

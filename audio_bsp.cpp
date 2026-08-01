@@ -634,20 +634,49 @@ static void stream_playback_task(void *arg)
 
     Serial.printf("STREAM playback: %d Hz, %d ch, %d bps\n", sr, ch, bps);
 
+    if (sr <= 0 || sr >= 192000 || ch < 1 || ch > 2 ||
+        bps < 8 || bps > 32 || (bps % 8) != 0) {
+        Serial.printf("STREAM: invalid format, aborting playback\n");
+        stream_buf_free();
+        wav_playing = false;
+        wav_task_handle = NULL;
+        activity_feed();
+        vTaskDelete(NULL);
+        return;
+    }
+
     esp_codec_dev_sample_info_t fs = {};
     fs.sample_rate = sr;
     fs.channel = ch;
     fs.bits_per_sample = bps;
     esp_codec_dev_set_out_vol(playback, 100.0);
-    esp_codec_dev_open(playback, &fs);
+    int open_ret = esp_codec_dev_open(playback, &fs);
+    if (open_ret != ESP_CODEC_DEV_OK) {
+        Serial.printf("STREAM: codec open failed: %d\n", open_ret);
+        esp_codec_dev_close(playback);
+        stream_buf_free();
+        wav_playing = false;
+        wav_task_handle = NULL;
+        activity_feed();
+        vTaskDelete(NULL);
+        return;
+    }
     codec_opened = true;
     vTaskDelay(pdMS_TO_TICKS(10));
+    last_data_ms = millis();
+
+    const size_t frame_bytes = (size_t)ch * (size_t)(bps / 8);
+    bool underflow_reported = false;
 
     while (!wav_stop_flag) {
-        uint8_t chunk[4096];
+        uint8_t chunk[1024];
         size_t avail = stream_buf_available();
         if (avail == 0) {
             if (stream_buf_is_ended()) break;
+            if (!underflow_reported) {
+                Serial.printf("STREAM: buffer underrun, waiting for data\n");
+                underflow_reported = true;
+            }
             if (millis() - last_data_ms > STREAM_TIMEOUT_MS) {
                 Serial.printf("STREAM: timeout waiting for data\n");
                 break;
@@ -656,17 +685,45 @@ static void stream_playback_task(void *arg)
             continue;
         }
 
-        if (avail > 4096) avail = 4096;
+        underflow_reported = false;
+        if (avail > sizeof(chunk)) avail = sizeof(chunk);
+        if (frame_bytes > 1) {
+            avail -= avail % frame_bytes;
+        }
+        if (avail == 0) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
         size_t got = stream_buf_read(chunk, avail);
 
         if (got > 0) {
-            last_data_ms = millis();
-            int ret = esp_codec_dev_write(playback, chunk, got);
-            if (ret != ESP_CODEC_DEV_OK) {
+            // Do not discard a PCM block on a transient I2S/DMA error.
+            // The codec write is blocking and normally gives the WS task
+            // enough time to run without an extra fixed delay here.
+            uint32_t write_start_ms = millis();
+            uint32_t write_failures = 0;
+            int ret = ESP_CODEC_DEV_DRV_ERR;
+            while (!wav_stop_flag) {
+                ret = esp_codec_dev_write(playback, chunk, got);
+                if (ret == ESP_CODEC_DEV_OK) break;
+
+                write_failures++;
+                if (write_failures == 1 || (write_failures % 50) == 0) {
+                    Serial.printf("STREAM: I2S write failed ret=%d attempt=%u\n",
+                                  ret, (unsigned int)write_failures);
+                }
+                if (millis() - write_start_ms >= 1000) {
+                    Serial.printf("STREAM: I2S write timeout, aborting playback\n");
+                    break;
+                }
                 vTaskDelay(pdMS_TO_TICKS(2));
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(1));
             }
+
+            if (ret != ESP_CODEC_DEV_OK) {
+                break;
+            }
+            last_data_ms = millis();
         }
     }
 
@@ -682,13 +739,14 @@ static void stream_playback_task(void *arg)
 
 void audio_stream_playback_start(int sample_rate, int channels, int bits)
 {
-    if (wav_playing) {
+    if (wav_playing || wav_task_handle) {
         wav_stop_flag = true;
         if (wav_task_handle) xTaskNotifyGive(wav_task_handle);
         while (wav_task_handle) vTaskDelay(pdMS_TO_TICKS(10));
     }
     if (!stream_buf_init(STREAM_BUF_SIZE)) {
         Serial.printf("STREAM: ring buf init failed, aborting\n");
+        wav_playing = false;
         return;
     }
     wav_pcm_override = true;
@@ -699,7 +757,15 @@ void audio_stream_playback_start(int sample_rate, int channels, int bits)
     wav_replay_flag = false;
     wav_playing = true;
     stream_buf_reset_stream();
-    xTaskCreatePinnedToCore(stream_playback_task, "stream_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
+    wav_task_handle = NULL;
+    BaseType_t task_ret = xTaskCreatePinnedToCore(
+        stream_playback_task, "stream_task", 8 * 1024, NULL, 5, &wav_task_handle, 1);
+    if (task_ret != pdPASS) {
+        Serial.printf("STREAM: failed to create playback task\n");
+        stream_buf_free();
+        wav_playing = false;
+        wav_task_handle = NULL;
+    }
 }
 
 void audio_play_wav_stop(void)

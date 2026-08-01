@@ -120,7 +120,7 @@ static void onMessageCallback(WebsocketsMessage message)
         size_t len = message.length();
 
         if (audio_streaming) {
-            if (!stream_buf_write((const uint8_t*)message.c_str(), len, 5000)) {
+            if (!stream_buf_write((const uint8_t*)message.c_str(), len, STREAM_TIMEOUT_MS)) {
                 Serial.printf("WS: stream buf write failed (full/timeout), chunk lost\n");
             }
             audio_offset += len;
@@ -130,6 +130,11 @@ static void onMessageCallback(WebsocketsMessage message)
             return;
         }
 
+        // A new binary message must not free the ring buffer while an old
+        // streaming task is still draining it.
+        if (audio_wav_is_playing()) {
+            audio_play_wav_stop();
+        }
         free_audio_buffer();
         audio_buffer = (uint8_t*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
         if (audio_buffer) {
@@ -143,9 +148,17 @@ static void onMessageCallback(WebsocketsMessage message)
 
     const char* payload = message.c_str();
     size_t length = message.length();
-    Serial.printf("WS TEXT: %.*s%s\n", (int)(length > 200 ? 200 : length), payload, length > 200 ? "..." : "");
+    bool is_audio_control = parse_json_has_type(payload, "audio_start") ||
+                            parse_json_has_type(payload, "audio_end") ||
+                            parse_json_has_type(payload, "error");
+    if (!audio_streaming || is_audio_control) {
+        Serial.printf("WS TEXT: %.*s%s\n", (int)(length > 200 ? 200 : length), payload, length > 200 ? "..." : "");
+    }
 
     if (parse_json_has_type(payload, "audio_start")) {
+        if (audio_wav_is_playing()) {
+            audio_play_wav_stop();
+        }
         free_audio_buffer();
         audio_streaming = true;
         audio_is_pcm = true;
@@ -155,6 +168,9 @@ static void onMessageCallback(WebsocketsMessage message)
         audio_bps = parse_json_int(payload, "bits", 16);
         if (audio_ch < 1 || audio_ch > 2) audio_ch = 1;
         audio_stream_playback_start(audio_sr, audio_ch, audio_bps);
+        if (!audio_wav_is_playing()) {
+            audio_streaming = false;
+        }
         Serial.printf("WS: audio streaming started %dHz %dch %dbps\n", audio_sr, audio_ch, audio_bps);
     } else if (parse_json_has_type(payload, "audio_end")) {
         audio_streaming = false;
@@ -166,19 +182,18 @@ static void onMessageCallback(WebsocketsMessage message)
         Serial.flush();
     } else if (parse_json_has_type(payload, "status")) {
         const char* state = parse_status_state(payload);
-        if (lvgl_lock(200)) {
+        if (g_app_state == STATE_RECEIVING) {
             if (strcmp(state, "transcribing") == 0) {
-                update_screen_receiving_status(currentLang->transcribing);
+                queue_screen_receiving_status(currentLang->transcribing);
             } else if (strcmp(state, "thinking") == 0) {
-                update_screen_receiving_status(currentLang->thinking);
+                queue_screen_receiving_status(currentLang->thinking);
             } else if (strcmp(state, "speaking") == 0) {
                 if (agent_text_len > 0) {
-                    update_screen_receiving_status(agent_text);
+                    queue_screen_receiving_status(agent_text);
                 } else {
-                    update_screen_receiving_status(currentLang->speaking);
+                    queue_screen_receiving_status(currentLang->speaking);
                 }
             }
-            lvgl_unlock();
         }
     } else if (parse_json_has_type(payload, "token")) {
         if (agent_text_len < sizeof(agent_text) - 1) {
@@ -188,16 +203,14 @@ static void onMessageCallback(WebsocketsMessage message)
         if (agent_text_len >= sizeof(agent_text) - 4) {
             Serial.printf("WS: agent_text near full (%u/%u)\n", (unsigned int)agent_text_len, (unsigned int)sizeof(agent_text));
         }
-        if (g_app_state == STATE_RECEIVING && lvgl_lock(200)) {
-            update_screen_receiving_status(agent_text);
-            lvgl_unlock();
+        if (g_app_state == STATE_RECEIVING) {
+            queue_screen_receiving_status(agent_text);
         }
     } else if (parse_json_has_type(payload, "text")) {
         parse_json_string(payload, "content", agent_text, sizeof(agent_text));
         agent_text_len = strlen(agent_text);
-        if (g_app_state == STATE_RECEIVING && lvgl_lock(200)) {
-            update_screen_receiving_status(agent_text);
-            lvgl_unlock();
+        if (g_app_state == STATE_RECEIVING) {
+            queue_screen_receiving_status(agent_text);
         }
     } else if (parse_json_has_type(payload, "done")) {
         waiting_response = false;
@@ -308,11 +321,13 @@ void ws_task(void *arg)
                 if (connected && cmd.wav_buf && cmd.wav_size > 0) {
                     agent_text_len = 0;
                     agent_text[0] = '\0';
-                    client.sendBinary((const char*)cmd.wav_buf, cmd.wav_size);
-                    client.send("{\"type\":\"audio_end\"}");
+                    bool audio_sent = client.sendBinary((const char*)cmd.wav_buf, cmd.wav_size);
+                    bool end_sent = client.send("{\"type\":\"audio_end\"}");
                     request_start_ms = millis();
                     waiting_response = true;
-                    Serial.printf("WS: sent %u bytes WAV + audio_end\n", cmd.wav_size);
+                    audio_free_recording_buffer();
+                    Serial.printf("WS: sent %u bytes WAV + audio_end (data=%d end=%d)\n",
+                                  cmd.wav_size, audio_sent, end_sent);
                 }
             } else if (cmd.type == WS_CMD_RECONNECT) {
                 client.close();
@@ -343,10 +358,13 @@ void ws_send_audio(const uint8_t* wav_buf, uint32_t wav_size)
 {
     if (!connected) {
         Serial.printf("WS: not connected, cannot send audio\n");
+        audio_free_recording_buffer();
         return;
     }
     WsCmd cmd = { WS_CMD_SEND_AUDIO, wav_buf, wav_size };
-    xQueueSend(ws_cmd_queue, &cmd, portMAX_DELAY);
+    if (xQueueSend(ws_cmd_queue, &cmd, portMAX_DELAY) != pdTRUE) {
+        audio_free_recording_buffer();
+    }
 }
 
 void ws_request_reconnect(void)

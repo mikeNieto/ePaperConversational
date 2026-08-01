@@ -84,7 +84,6 @@ void switch_state(AppState new_state)
         audio_start_recording();
         new_scr = create_screen_2b_listening();
     } else if (new_state == STATE_RECEIVING) {
-        audio_free_recording_buffer();
         new_scr = create_screen_receiving();
     } else if (new_state == STATE_RESPONSE) {
         new_scr = create_screen_6_response(g_agent_text);
