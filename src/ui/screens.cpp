@@ -10,6 +10,7 @@
 
 /* Text updates are coalesced here so the WebSocket task never waits for an e-paper refresh. */
 static lv_obj_t* receiving_label = NULL;
+static lv_obj_t* receiving_container = NULL;
 static lv_timer_t* receiving_status_timer = NULL;
 static SemaphoreHandle_t receiving_status_mutex = NULL;
 static volatile bool receiving_status_ready = false;
@@ -30,7 +31,7 @@ static void configure_text_scroll(lv_obj_t* cont)
 static void receiving_status_timer_cb(lv_timer_t* timer)
 {
     (void)timer;
-    if (!receiving_status_ready || !receiving_label ||
+    if (!receiving_status_ready || !receiving_label || !receiving_container ||
         lv_scr_act() != lv_obj_get_screen(receiving_label) ||
         !receiving_status_mutex) {
         return;
@@ -39,8 +40,13 @@ static void receiving_status_timer_cb(lv_timer_t* timer)
     if (xSemaphoreTake(receiving_status_mutex, 0) != pdTRUE) return;
     bool has_pending = receiving_status_pending;
     if (has_pending) {
+        lv_coord_t scroll_y = lv_obj_get_scroll_y(receiving_container);
+        bool was_scrolling = lv_obj_is_scrolling(receiving_container);
         lv_label_set_text(receiving_label, pending_receiving_status);
         lv_obj_update_layout(lv_obj_get_parent(receiving_label));
+        if (!was_scrolling) {
+            lv_obj_scroll_to_y(receiving_container, scroll_y, LV_ANIM_OFF);
+        }
         receiving_status_pending = false;
     }
     xSemaphoreGive(receiving_status_mutex);
@@ -50,6 +56,7 @@ static void receiving_screen_invalidate(void)
 {
     receiving_status_ready = false;
     receiving_label = NULL;
+    receiving_container = NULL;
 }
 
 static void receiving_status_clear_pending(void)
@@ -178,6 +185,7 @@ lv_obj_t* create_screen_receiving(void)
     create_status_bar(screen);
 
     lv_obj_t* cont = lv_obj_create(screen);
+    receiving_container = cont;
     lv_obj_set_size(cont, 180, 170);
     lv_obj_set_pos(cont, 10, STATUS_BAR_H + 4);
     lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
@@ -206,7 +214,10 @@ lv_obj_t* create_screen_receiving(void)
 void update_screen_receiving_status(const char* status)
 {
     if (receiving_label) {
+        lv_coord_t scroll_y = lv_obj_get_scroll_y(receiving_container);
         lv_label_set_text(receiving_label, status);
+        lv_obj_update_layout(receiving_container);
+        lv_obj_scroll_to_y(receiving_container, scroll_y, LV_ANIM_OFF);
     }
 }
 
@@ -221,7 +232,16 @@ void queue_screen_receiving_status(const char* status)
     xSemaphoreGive(receiving_status_mutex);
 }
 
-lv_obj_t* create_screen_6_response(const char* agentText)
+lv_coord_t get_receiving_scroll_y(void)
+{
+    if (!receiving_container || !receiving_status_ready ||
+        lv_scr_act() != lv_obj_get_screen(receiving_container)) {
+        return 0;
+    }
+    return lv_obj_get_scroll_y(receiving_container);
+}
+
+lv_obj_t* create_screen_6_response(const char* agentText, lv_coord_t scroll_y)
 {
     receiving_screen_invalidate();
     lv_obj_t* screen = lv_obj_create(NULL);
@@ -247,6 +267,7 @@ lv_obj_t* create_screen_6_response(const char* agentText)
     lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
     lv_obj_set_height(label, LV_SIZE_CONTENT);
     lv_obj_update_layout(cont);
+    lv_obj_scroll_to_y(cont, scroll_y, LV_ANIM_OFF);
 
     return screen;
 }

@@ -119,6 +119,10 @@ void switch_state(AppState new_state)
     g_app_state = new_state;
 
     lv_obj_t* old_scr = lv_scr_act();
+    lv_coord_t response_scroll_y = 0;
+    if (new_state == STATE_RESPONSE) {
+        response_scroll_y = get_receiving_scroll_y();
+    }
     lv_obj_t* new_scr = NULL;
 
     if (new_state == STATE_CONNECTING) {
@@ -133,7 +137,7 @@ void switch_state(AppState new_state)
     } else if (new_state == STATE_RECEIVING) {
         new_scr = create_screen_receiving();
     } else if (new_state == STATE_RESPONSE) {
-        new_scr = create_screen_6_response(g_agent_text);
+        new_scr = create_screen_6_response(g_agent_text, response_scroll_y);
     } else if (new_state == STATE_SETTINGS) {
         new_scr = create_screen_settings(wifi_get_ssid(), lang_get_name());
     }
