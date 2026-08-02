@@ -25,6 +25,14 @@
 #include "ws_client.h"
 #include "messages.h"
 
+#if !defined(LVGL_VERSION_MAJOR) || LVGL_VERSION_MAJOR != 9
+#error "ePaperConversational requires LVGL 9.x"
+#endif
+
+#if !defined(EPAPER_LVGL_CONF_VERSION)
+#error "Use the project lv_conf.h with LVGL 9.x"
+#endif
+
 RTC_DATA_ATTR int boot_count = 0;
 RTC_DATA_ATTR int sleep_counter = 0;
 
@@ -41,13 +49,13 @@ AppState g_app_state = STATE_CONNECTING;
 bool g_play_wake_beep = false;
 char g_agent_text[AGENT_TEXT_SIZE] = {0};
 
-static volatile lv_coord_t last_touch_x = 0;
-static volatile lv_coord_t last_touch_y = 0;
+static volatile int32_t last_touch_x = 0;
+static volatile int32_t last_touch_y = 0;
 static volatile bool last_touch_pressed = false;
 
 struct TouchSample {
-    lv_coord_t x;
-    lv_coord_t y;
+    int32_t x;
+    int32_t y;
     bool pressed;
 };
 
@@ -57,7 +65,7 @@ static uint8_t touch_sample_read = 0;
 static uint8_t touch_sample_write = 0;
 static portMUX_TYPE touch_sample_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static void touch_sample_push(lv_coord_t x, lv_coord_t y, bool pressed)
+static void touch_sample_push(int32_t x, int32_t y, bool pressed)
 {
     portENTER_CRITICAL(&touch_sample_mux);
     uint8_t next = (uint8_t)((touch_sample_write + 1) % TOUCH_SAMPLE_QUEUE_SIZE);
@@ -102,7 +110,7 @@ static void show_error_message(const char* msg, int duration_ms)
         lv_obj_t* lbl = lv_label_create(scr);
         lv_label_set_text(lbl, msg);
         lv_obj_center(lbl);
-        lv_scr_load(scr);
+        lv_screen_load(scr);
         lv_timer_handler();
         lvgl_unlock();
     }
@@ -118,8 +126,8 @@ void switch_state(AppState new_state)
     }
     g_app_state = new_state;
 
-    lv_obj_t* old_scr = lv_scr_act();
-    lv_coord_t response_scroll_y = 0;
+    lv_obj_t* old_scr = lv_screen_active();
+    int32_t response_scroll_y = 0;
     if (new_state == STATE_RESPONSE) {
         response_scroll_y = get_receiving_scroll_y();
     }
@@ -143,10 +151,10 @@ void switch_state(AppState new_state)
     }
 
     if (new_scr) {
-        lv_scr_load(new_scr);
+        lv_screen_load(new_scr);
         lv_timer_handler();
         if (old_scr && old_scr != lv_layer_top()) {
-            lv_obj_del(old_scr);
+            lv_obj_delete(old_scr);
         }
     }
 
@@ -286,7 +294,7 @@ void lvgl_unlock(void)
     example_lvgl_unlock();
 }
 
-static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
+static void lvgl_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *color_map)
 {
     uint16_t *buffer = (uint16_t *)color_map;
     driver->EPD_Clear();
@@ -298,7 +306,7 @@ static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
         }
     }
     driver->EPD_DisplayPart();
-    lv_disp_flush_ready(drv);
+    lv_display_flush_ready(display);
 }
 
 static void example_increase_lvgl_tick(void *arg)
@@ -323,17 +331,18 @@ static void lvgl_port_task(void *arg)
     }
 }
 
-static void lvgl_touch_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data)
+static void lvgl_touch_read_cb(lv_indev_t* indev, lv_indev_data_t* data)
 {
+    (void)indev;
     TouchSample sample;
     if (touch_sample_pop(&sample)) {
         data->point.x = sample.x;
         data->point.y = sample.y;
-        data->state = sample.pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+        data->state = sample.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     } else {
         data->point.x = last_touch_x;
         data->point.y = last_touch_y;
-        data->state = last_touch_pressed ? LV_INDEV_STATE_PR : LV_INDEV_STATE_REL;
+        data->state = last_touch_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     }
     data->continue_reading = touch_samples_pending();
 }
@@ -346,36 +355,31 @@ void lvgl_port_init(void)
 
     lv_init();
 
-    lv_color_t *buffer_1 = (lv_color_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_SPIRAM);
+    uint8_t *buffer_1 = (uint8_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_SPIRAM);
     if (!buffer_1) {
         ESP_LOGW(TAG, "SPIRAM alloc for LVGL buf1 failed, using internal RAM");
-        buffer_1 = (lv_color_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_INTERNAL);
+        buffer_1 = (uint8_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_INTERNAL);
     }
-    lv_color_t *buffer_2 = (lv_color_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_SPIRAM);
+    uint8_t *buffer_2 = (uint8_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_SPIRAM);
     if (!buffer_2) {
         ESP_LOGW(TAG, "SPIRAM alloc for LVGL buf2 failed, using internal RAM");
-        buffer_2 = (lv_color_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_INTERNAL);
+        buffer_2 = (uint8_t *)heap_caps_malloc(LVGL_SPIRAM_BUFF_LEN, MALLOC_CAP_INTERNAL);
     }
     assert(buffer_1 && buffer_2);
 
-    static lv_disp_draw_buf_t disp_buf;
-    lv_disp_draw_buf_init(&disp_buf, buffer_1, buffer_2, LVGL_BUF_PIXELS);
+    lv_display_t *display = lv_display_create(EPD_WIDTH, EPD_HEIGHT);
+    assert(display);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    lv_display_set_flush_cb(display, lvgl_flush_cb);
+    lv_display_set_buffers(display, buffer_1, buffer_2, LVGL_SPIRAM_BUFF_LEN,
+                           LV_DISPLAY_RENDER_MODE_FULL);
 
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = EPD_WIDTH;
-    disp_drv.ver_res = EPD_HEIGHT;
-    disp_drv.flush_cb = lvgl_flush_cb;
-    disp_drv.draw_buf = &disp_buf;
-    disp_drv.full_refresh = 1;
-    lv_disp_drv_register(&disp_drv);
-
-    static lv_indev_drv_t indev_drv;
-    lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = lvgl_touch_read_cb;
-    indev_drv.scroll_limit = 2;
-    lv_indev_drv_register(&indev_drv);
+    lv_indev_t *indev = lv_indev_create();
+    assert(indev);
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev, lvgl_touch_read_cb);
+    lv_indev_set_display(indev, display);
+    lv_indev_set_scroll_limit(indev, 2);
 
     esp_timer_create_args_t lvgl_tick_timer_args = {};
     lvgl_tick_timer_args.callback = &example_increase_lvgl_tick;
@@ -399,7 +403,7 @@ void user_ui_init(void)
     ui_screen_loaded = true;
 
     lv_obj_t* screen = create_screen_connecting();
-    lv_scr_load(screen);
+    lv_screen_load(screen);
     lv_timer_handler();
     Serial.printf("Connecting screen loaded. Waiting for WebSocket...\n");
 }
@@ -417,7 +421,7 @@ void button_task(void *arg)
             if (lvgl_lock(1000)) {
                 status_bar_set_visible(false);
                 lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
-                lv_scr_load(s0);
+                lv_screen_load(s0);
                 lv_timer_handler();
                 lvgl_unlock();
             }
@@ -533,8 +537,8 @@ void touch_task(void *arg)
     uint32_t io_num;
     bool was_pressed = false;
     uint8_t missed_touch_reads = 0;
-    lv_coord_t previous_x = 0;
-    lv_coord_t previous_y = 0;
+    int32_t previous_x = 0;
+    int32_t previous_y = 0;
     for (;;) {
         /* Poll as well as consuming the interrupt. This guarantees a release
          * is reported even when the controller emits only one interrupt. */
@@ -544,11 +548,11 @@ void touch_task(void *arg)
         bool pressed = ft6336->GetTouchPoint(&x, &y);
         if (pressed) {
             missed_touch_reads = 0;
-            last_touch_x = (lv_coord_t)x;
-            last_touch_y = (lv_coord_t)y;
+            last_touch_x = (int32_t)x;
+            last_touch_y = (int32_t)y;
             last_touch_pressed = true;
-            if (!was_pressed || previous_x != (lv_coord_t)x || previous_y != (lv_coord_t)y) {
-                touch_sample_push((lv_coord_t)x, (lv_coord_t)y, true);
+            if (!was_pressed || previous_x != (int32_t)x || previous_y != (int32_t)y) {
+                touch_sample_push((int32_t)x, (int32_t)y, true);
             }
             xEventGroupSetBits(touch_event_group, TOUCH_BIT_TAP);
             activity_feed();
@@ -572,8 +576,8 @@ void touch_task(void *arg)
             }
         }
         if (pressed) {
-            previous_x = (lv_coord_t)x;
-            previous_y = (lv_coord_t)y;
+            previous_x = (int32_t)x;
+            previous_y = (int32_t)y;
         }
         if (pressed) was_pressed = true;
     }
@@ -653,7 +657,7 @@ void deep_sleep_timer_task(void *arg)
             if (lvgl_lock(1000)) {
                 status_bar_set_visible(false);
                 lv_obj_t* s0 = create_screen_0_deep_sleep(sleep_counter);
-                lv_scr_load(s0);
+                lv_screen_load(s0);
                 lv_timer_handler();
                 lvgl_unlock();
             }

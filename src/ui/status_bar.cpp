@@ -73,7 +73,7 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
     lv_obj_set_style_bg_color(top_bar, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(top_bar, LV_OPA_COVER, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(top_bar, 0, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
 
     wifi_label = lv_label_create(top_bar);
     lv_label_set_text(wifi_label, currentLang->wifi_off);
@@ -88,7 +88,7 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
     lv_obj_set_style_text_font(battery_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     lv_obj_t* line = lv_line_create(top_bar);
-    static lv_point_t line_pts[] = { {0, 22}, {199, 22} };
+    static lv_point_precise_t line_pts[] = { {0, 22}, {199, 22} };
     lv_line_set_points(line, line_pts, 2);
     lv_obj_set_style_line_color(line, lv_color_black(), LV_STATE_DEFAULT);
     lv_obj_set_style_line_width(line, 1, LV_STATE_DEFAULT);
@@ -115,7 +115,7 @@ void status_bar_update_wifi(bool wifiOk)
 void status_bar_set_visible(bool visible)
 {
     if (top_bar) {
-        if (visible) lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_HIDDEN);
+        if (visible) lv_obj_remove_flag(top_bar, LV_OBJ_FLAG_HIDDEN);
         else         lv_obj_add_flag(top_bar, LV_OBJ_FLAG_HIDDEN);
     }
 }

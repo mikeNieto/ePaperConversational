@@ -4,6 +4,10 @@
 #include "esp_heap_caps.h"
 #include "messages.h"
 
+#if !defined(BOARD_HAS_PSRAM)
+#error "Enable PSRAM (OPI PSRAM) in Arduino IDE before compiling this firmware"
+#endif
+
 extern RTC_DATA_ATTR int boot_count;
 extern RTC_DATA_ATTR int sleep_counter;
 
@@ -40,7 +44,7 @@ void setup()
         if (lvgl_lock(-1)) {
             status_bar_set_visible(false);
             lv_obj_t* screen0 = create_screen_0_deep_sleep(sleep_counter);
-            lv_scr_load(screen0);
+            lv_screen_load(screen0);
             lv_timer_handler();
             lvgl_unlock();
         }

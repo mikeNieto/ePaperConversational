@@ -4,14 +4,15 @@
 
 ESP32-S3 firmware for Waveshare ESP32-S3-Touch-ePaper-1.54 voice conversational device.
 Written in C/C++ targeting Arduino IDE (no PlatformIO config, no Makefile).
-Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, minimp3.
+Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, minimp3.
 
 ## Build
 
 - Entry point: `ePaperConversational.ino` — Arduino IDE compiles this + all `.cpp`/`.h`/`.c` files in project root and `src/`
 - No CI, no lint, no typecheck, no tests
 - Only verification: compile with Arduino IDE and flash to hardware
-- **PSRAM must be enabled**: `heap_caps_malloc_extmem_enable(256)` called first in `setup()`
+- **LVGL setup**: use exactly one Arduino library named `lvgl`, version 9.x. Use the tracked `lv_conf.h` as the project configuration when installing it in the Arduino sketchbook.
+- **PSRAM must be enabled**: select `OPI PSRAM` in Arduino IDE for the ESP32-S3 board, and call `heap_caps_malloc_extmem_enable(256)` first in `setup()`
 - **Secrets setup**: `cp user_config_secrets.example.h user_config_secrets.h` then edit with real WiFi/api credentials
 
 ## Architecture
@@ -29,10 +30,11 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - `sleep_timer` (1, 4KB) — inactivity timer (60s), skips during LISTENING/RECEIVING/RESPONSE(when playing)
 - **State machine**: `AppState` enum with 6 states (`STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4, STATE_SETTINGS=5`), driven by `AppEvent` struct (`type` + `data`) on `state_queue`
 - **Event types**: `EVT_WS_CONNECTED`(1) `EVT_WS_DISCONNECTED`(2) `EVT_WS_ERROR`(3) `EVT_START_RECORDING`(4) `EVT_STOP_RECORDING`(5) `EVT_RECORDING_DONE`(6) `EVT_RESPONSE_READY`(7) `EVT_NEXT_MESSAGE`(8) `EVT_WS_RECONNECT`(9) `EVT_DISCARD`(10) `EVT_OPEN_SETTINGS`(11) `EVT_TOGGLE_LANGUAGE`(12) `EVT_EXIT_SETTINGS`(13)
-- **LVGL v8.4**: widget-based UI, 200x200 e-paper display, `full_refresh = 1` always
+- **LVGL 9.x**: widget-based UI, 200x200 e-paper display, `LV_DISPLAY_RENDER_MODE_FULL` always
   - **Mandatory**: lock LVGL mutex (`lvgl_lock(-1)` / `lvgl_unlock()`) before any widget operation from any task
-  - Screens: `lv_obj_create(NULL)` → build widgets → `lv_scr_load()` → `lv_timer_handler()` → `lv_obj_del(old_scr)`
-  - Flush callback: `EPD_Clear()` → loop pixels → threshold RGB565 at `0x7FFF` → `EPD_DrawColorPixel()` → `EPD_DisplayPart()`
+  - Screens: `lv_obj_create(NULL)` → build widgets → `lv_screen_load()` → `lv_timer_handler()` → `lv_obj_delete(old_scr)`
+  - Display port: `lv_display_create()` + RGB565 buffers in bytes + `lv_display_set_flush_cb()`
+  - Flush callback: `EPD_Clear()` → loop pixels → threshold RGB565 at `0x7FFF` → `EPD_DrawColorPixel()` → `EPD_DisplayPart()` → `lv_display_flush_ready()`
   - 2 display buffers (80KB each) in SPIRAM, fallback to internal RAM if SPIRAM fails
   - Touch: `lv_indev_touch_read_cb` reads from global `last_touch_x/y/pressed` set by `touch_task`
   - `lv_tick_inc(5)` driven by `esp_timer` at 5ms period
@@ -68,7 +70,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL v8.4, mi
   - Wake causes: `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (60 min)
   - Two entry paths: `enter_deep_sleep()` (full EPD refresh + `EPD_Display()`) and `enter_deep_sleep_light()` (no display refresh, used for timer auto-wake)
   - `rtc_gpio_hold_en(GPIO_NUM_17)` to keep VBAT powered
-- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL buffers (80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB)
+- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL allocator pool and buffers (48KB + 80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB)
 
 ## Key conventions
 

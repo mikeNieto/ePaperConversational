@@ -6,7 +6,7 @@
 #include "freertos/semphr.h"
 #include <string.h>
 
-#define STATUS_BAR_H 24
+#define STATUS_BAR_HEIGHT 24
 
 /* Text updates are coalesced here so the WebSocket task never waits for an e-paper refresh. */
 static lv_obj_t* receiving_label = NULL;
@@ -22,17 +22,17 @@ static void configure_text_scroll(lv_obj_t* cont)
     lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(cont, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_AUTO);
-    lv_obj_clear_flag(cont, LV_OBJ_FLAG_SCROLL_MOMENTUM |
-                            LV_OBJ_FLAG_SCROLL_ELASTIC |
-                            LV_OBJ_FLAG_SCROLL_CHAIN_HOR |
-                            LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLL_CHAIN_HOR);
+    lv_obj_remove_flag(cont, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
 }
 
 static void receiving_status_timer_cb(lv_timer_t* timer)
 {
     (void)timer;
     if (!receiving_status_ready || !receiving_label || !receiving_container ||
-        lv_scr_act() != lv_obj_get_screen(receiving_label) ||
+        lv_screen_active() != lv_obj_get_screen(receiving_label) ||
         !receiving_status_mutex) {
         return;
     }
@@ -40,7 +40,7 @@ static void receiving_status_timer_cb(lv_timer_t* timer)
     if (xSemaphoreTake(receiving_status_mutex, 0) != pdTRUE) return;
     bool has_pending = receiving_status_pending;
     if (has_pending) {
-        lv_coord_t scroll_y = lv_obj_get_scroll_y(receiving_container);
+        int32_t scroll_y = lv_obj_get_scroll_y(receiving_container);
         bool was_scrolling = lv_obj_is_scrolling(receiving_container);
         lv_label_set_text(receiving_label, pending_receiving_status);
         lv_obj_update_layout(lv_obj_get_parent(receiving_label));
@@ -88,7 +88,7 @@ lv_obj_t* create_screen_0_deep_sleep(int sleep_counter)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* label = lv_label_create(screen);
     lv_label_set_text_fmt(label, "%s %d", currentLang->sleeping, sleep_counter);
@@ -104,7 +104,7 @@ lv_obj_t* create_screen_connecting(void)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
     center_label(screen, currentLang->connecting);
@@ -118,7 +118,7 @@ lv_obj_t* create_screen_2_record(void)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
     center_label(screen, currentLang->record_message);
@@ -132,7 +132,7 @@ lv_obj_t* create_screen_2b_listening(void)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
     center_label(screen, currentLang->listening);
@@ -146,7 +146,7 @@ lv_obj_t* create_screen_settings(const char* ssid, const char* lang_name)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
 
@@ -154,17 +154,17 @@ lv_obj_t* create_screen_settings(const char* ssid, const char* lang_name)
     lv_label_set_text(title, currentLang->settings);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_obj_set_width(title, lv_pct(100));
-    lv_obj_set_pos(title, 0, STATUS_BAR_H + 8);
+    lv_obj_set_pos(title, 0, STATUS_BAR_HEIGHT + 8);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     lv_obj_t* wifi = lv_label_create(screen);
     lv_label_set_text_fmt(wifi, "%s: %s", currentLang->wifi_label, ssid);
-    lv_obj_set_pos(wifi, 10, STATUS_BAR_H + 42);
+    lv_obj_set_pos(wifi, 10, STATUS_BAR_HEIGHT + 42);
     lv_obj_set_style_text_font(wifi, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     lv_obj_t* lang = lv_label_create(screen);
     lv_label_set_text_fmt(lang, "%s: %s", currentLang->language, lang_name);
-    lv_obj_set_pos(lang, 10, STATUS_BAR_H + 64);
+    lv_obj_set_pos(lang, 10, STATUS_BAR_HEIGHT + 64);
     lv_obj_set_style_text_font(lang, &lv_font_montserrat_14, LV_STATE_DEFAULT);
 
     return screen;
@@ -180,21 +180,21 @@ lv_obj_t* create_screen_receiving(void)
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
 
     lv_obj_t* cont = lv_obj_create(screen);
     receiving_container = cont;
     lv_obj_set_size(cont, 180, 170);
-    lv_obj_set_pos(cont, 10, STATUS_BAR_H + 4);
+    lv_obj_set_pos(cont, 10, STATUS_BAR_HEIGHT + 4);
     lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
     configure_text_scroll(cont);
 
     receiving_label = lv_label_create(cont);
-    lv_label_set_long_mode(receiving_label, LV_LABEL_LONG_WRAP);
+    lv_label_set_long_mode(receiving_label, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(receiving_label, lv_pct(100));
     lv_obj_set_height(receiving_label, LV_SIZE_CONTENT);
     lv_obj_set_style_text_align(receiving_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
@@ -214,7 +214,7 @@ lv_obj_t* create_screen_receiving(void)
 void update_screen_receiving_status(const char* status)
 {
     if (receiving_label) {
-        lv_coord_t scroll_y = lv_obj_get_scroll_y(receiving_container);
+        int32_t scroll_y = lv_obj_get_scroll_y(receiving_container);
         lv_label_set_text(receiving_label, status);
         lv_obj_update_layout(receiving_container);
         lv_obj_scroll_to_y(receiving_container, scroll_y, LV_ANIM_OFF);
@@ -232,35 +232,35 @@ void queue_screen_receiving_status(const char* status)
     xSemaphoreGive(receiving_status_mutex);
 }
 
-lv_coord_t get_receiving_scroll_y(void)
+int32_t get_receiving_scroll_y(void)
 {
     if (!receiving_container || !receiving_status_ready ||
-        lv_scr_act() != lv_obj_get_screen(receiving_container)) {
+        lv_screen_active() != lv_obj_get_screen(receiving_container)) {
         return 0;
     }
     return lv_obj_get_scroll_y(receiving_container);
 }
 
-lv_obj_t* create_screen_6_response(const char* agentText, lv_coord_t scroll_y)
+lv_obj_t* create_screen_6_response(const char* agentText, int32_t scroll_y)
 {
     receiving_screen_invalidate();
     lv_obj_t* screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_white(), LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, LV_STATE_DEFAULT);
-    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
     create_status_bar(screen);
 
     lv_obj_t* cont = lv_obj_create(screen);
     lv_obj_set_size(cont, 180, 170);
-    lv_obj_set_pos(cont, 10, STATUS_BAR_H + 4);
+    lv_obj_set_pos(cont, 10, STATUS_BAR_HEIGHT + 4);
     lv_obj_set_style_border_width(cont, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(cont, 4, LV_STATE_DEFAULT);
     configure_text_scroll(cont);
 
     lv_obj_t* label = lv_label_create(cont);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_WRAP);
     lv_obj_set_width(label, lv_pct(100));
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(label, agentText);
