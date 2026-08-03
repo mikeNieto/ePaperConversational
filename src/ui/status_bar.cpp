@@ -78,14 +78,14 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
     wifi_label = lv_label_create(top_bar);
     lv_label_set_text(wifi_label, currentLang->wifi_off);
     lv_obj_set_pos(wifi_label, 4, 2);
-    lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     draw_battery_icon(top_bar);
 
     battery_label = lv_label_create(top_bar);
     lv_label_set_text(battery_label, "100%");
     lv_obj_set_pos(battery_label, 148, 2);
-    lv_obj_set_style_text_font(battery_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(battery_label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     lv_obj_t* line = lv_line_create(top_bar);
     static lv_point_precise_t line_pts[] = { {0, 22}, {199, 22} };

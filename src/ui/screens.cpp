@@ -79,7 +79,7 @@ static void center_label(lv_obj_t* parent, const char* text)
     lv_obj_t* label = lv_label_create(parent);
     lv_label_set_text(label, text);
     lv_obj_center(label);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 }
 
 lv_obj_t* create_screen_0_deep_sleep(int sleep_counter)
@@ -93,7 +93,7 @@ lv_obj_t* create_screen_0_deep_sleep(int sleep_counter)
     lv_obj_t* label = lv_label_create(screen);
     lv_label_set_text_fmt(label, "%s %d", currentLang->sleeping, sleep_counter);
     lv_obj_center(label);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     return screen;
 }
@@ -155,17 +155,17 @@ lv_obj_t* create_screen_settings(const char* ssid, const char* lang_name)
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_obj_set_width(title, lv_pct(100));
     lv_obj_set_pos(title, 0, STATUS_BAR_HEIGHT + 8);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     lv_obj_t* wifi = lv_label_create(screen);
     lv_label_set_text_fmt(wifi, "%s: %s", currentLang->wifi_label, ssid);
     lv_obj_set_pos(wifi, 10, STATUS_BAR_HEIGHT + 42);
-    lv_obj_set_style_text_font(wifi, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(wifi, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     lv_obj_t* lang = lv_label_create(screen);
     lv_label_set_text_fmt(lang, "%s: %s", currentLang->language, lang_name);
     lv_obj_set_pos(lang, 10, STATUS_BAR_HEIGHT + 64);
-    lv_obj_set_style_text_font(lang, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(lang, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
 
     return screen;
 }
@@ -199,7 +199,7 @@ lv_obj_t* create_screen_receiving(void)
     lv_obj_set_height(receiving_label, LV_SIZE_CONTENT);
     lv_obj_set_style_text_align(receiving_label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(receiving_label, currentLang->transcribing);
-    lv_obj_set_style_text_font(receiving_label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(receiving_label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
     lv_obj_update_layout(cont);
 
     receiving_status_clear_pending();
@@ -264,7 +264,7 @@ lv_obj_t* create_screen_6_response(const char* agentText, int32_t scroll_y)
     lv_obj_set_width(label, lv_pct(100));
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, LV_STATE_DEFAULT);
     lv_label_set_text(label, agentText);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_latin_14, LV_STATE_DEFAULT);
     lv_obj_set_height(label, LV_SIZE_CONTENT);
     lv_obj_update_layout(cont);
     lv_obj_scroll_to_y(cont, scroll_y, LV_ANIM_OFF);

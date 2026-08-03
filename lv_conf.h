@@ -60,8 +60,9 @@
 #define LV_USE_MATRIX 0
 #define LV_USE_PRIVATE_API 0
 
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_DEFAULT &lv_font_montserrat_14
+#define LV_FONT_MONTSERRAT_14 0
+#define LV_FONT_CUSTOM_DECLARE LV_FONT_DECLARE(lv_font_montserrat_latin_14)
+#define LV_FONT_DEFAULT &lv_font_montserrat_latin_14
 #define LV_FONT_FMT_TXT_LARGE 0
 #define LV_USE_FONT_COMPRESSED 0
 #define LV_USE_FONT_PLACEHOLDER 1
