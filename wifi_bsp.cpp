@@ -141,7 +141,7 @@ void wifi_task(void *arg)
             wifi_connect_best();
         }
 
-        if (lvgl_lock(100)) {
+        if (lvgl_lock(-1)) {
             status_bar_update_wifi(wifi_is_connected());
             lvgl_unlock();
         }

@@ -590,8 +590,8 @@ void battery_task(void *arg)
         int pct = 0;
         float v = 0.0f;
         battery_get_status(&v, &pct);
-        Serial.printf("Battery: %.2fV %d%%\n", v, pct);
-        if (lvgl_lock(100)) {
+        printf("Battery[%u]: %.2fV %d%%\n", (unsigned)millis(), v, pct);
+        if (lvgl_lock(-1)) {
             update_status_bar(NULL, wifi_is_connected(), pct);
             lvgl_unlock();
         }
