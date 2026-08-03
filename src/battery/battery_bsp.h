@@ -8,6 +8,8 @@ extern "C" {
 void battery_init(void);
 float battery_get_voltage(void);
 int battery_get_percentage(void);
+int battery_voltage_to_percentage(float voltage);
+void battery_get_status(float* voltage, int* percentage);
 
 #ifdef __cplusplus
 }

@@ -587,8 +587,9 @@ void battery_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(5000));
     for (;;) {
-        int pct = battery_get_percentage();
-        float v = battery_get_voltage();
+        int pct = 0;
+        float v = 0.0f;
+        battery_get_status(&v, &pct);
         Serial.printf("Battery: %.2fV %d%%\n", v, pct);
         if (lvgl_lock(100)) {
             update_status_bar(NULL, wifi_is_connected(), pct);

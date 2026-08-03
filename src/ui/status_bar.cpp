@@ -34,6 +34,7 @@ static void draw_battery_icon(lv_obj_t* parent)
     lv_obj_set_pos(bar_fill1, 122, 6);
     lv_obj_set_style_border_width(bar_fill1, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(bar_fill1, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(bar_fill1, LV_OPA_COVER, LV_STATE_DEFAULT);
     lv_obj_set_style_radius(bar_fill1, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(bar_fill1, 0, LV_STATE_DEFAULT);
 
@@ -42,6 +43,7 @@ static void draw_battery_icon(lv_obj_t* parent)
     lv_obj_set_pos(bar_fill2, 126, 6);
     lv_obj_set_style_border_width(bar_fill2, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(bar_fill2, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(bar_fill2, LV_OPA_COVER, LV_STATE_DEFAULT);
     lv_obj_set_style_radius(bar_fill2, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(bar_fill2, 0, LV_STATE_DEFAULT);
 
@@ -50,6 +52,7 @@ static void draw_battery_icon(lv_obj_t* parent)
     lv_obj_set_pos(bar_fill3, 130, 6);
     lv_obj_set_style_border_width(bar_fill3, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(bar_fill3, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(bar_fill3, LV_OPA_COVER, LV_STATE_DEFAULT);
     lv_obj_set_style_radius(bar_fill3, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(bar_fill3, 0, LV_STATE_DEFAULT);
 
@@ -58,6 +61,7 @@ static void draw_battery_icon(lv_obj_t* parent)
     lv_obj_set_pos(bar_fill4, 134, 6);
     lv_obj_set_style_border_width(bar_fill4, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(bar_fill4, lv_color_black(), LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(bar_fill4, LV_OPA_COVER, LV_STATE_DEFAULT);
     lv_obj_set_style_radius(bar_fill4, 0, LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(bar_fill4, 0, LV_STATE_DEFAULT);
 }
@@ -98,9 +102,13 @@ lv_obj_t* create_status_bar(lv_obj_t* parent)
 
 void update_status_bar(lv_obj_t* bar, bool wifiOk, int batteryPct)
 {
+    (void)bar;
+    if (batteryPct < 0) batteryPct = 0;
+    if (batteryPct > 100) batteryPct = 100;
+
     if (wifi_label) lv_label_set_text(wifi_label, wifiOk ? currentLang->wifi_ok : currentLang->wifi_off);
     if (battery_label) lv_label_set_text_fmt(battery_label, "%d%%", batteryPct);
-    int bars = batteryPct / 25;
+    int bars = batteryPct == 0 ? 0 : (batteryPct + 24) / 25;
     if (bar_fill1) lv_obj_set_style_bg_color(bar_fill1, bars >= 1 ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
     if (bar_fill2) lv_obj_set_style_bg_color(bar_fill2, bars >= 2 ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);
     if (bar_fill3) lv_obj_set_style_bg_color(bar_fill3, bars >= 3 ? lv_color_black() : lv_color_white(), LV_STATE_DEFAULT);

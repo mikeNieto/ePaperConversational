@@ -48,6 +48,14 @@
 #define EPD_TP_RST_PIN GPIO_NUM_7
 #define EPD_TP_INT_PIN GPIO_NUM_21
 
+/* Battery measurement */
+#define BATTERY_SAMPLE_COUNT       16
+#define BATTERY_TRIM_SAMPLE_COUNT 2
+#define BATTERY_SAMPLE_DELAY_MS   2
+#define BATTERY_DIVIDER_RATIO     2.0f
+#define BATTERY_EMPTY_VOLTAGE     3.30f
+#define BATTERY_FULL_VOLTAGE      4.12f
+
 /* Deep Sleep */
 #define INACTIVITY_TIMEOUT_MS 60000
 #define SLEEP_DURATION_SEC 3600
