@@ -2,175 +2,164 @@
 
 ## Project
 
-ESP32-S3 firmware for Waveshare ESP32-S3-Touch-ePaper-1.54 voice conversational device.
-Written in C/C++ targeting Arduino IDE (no PlatformIO config, no Makefile).
-Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, minimp3.
+ESP32-S3 firmware for the Waveshare ESP32-S3-Touch-ePaper-1.54 voice conversational device.
+C/C++ for the **Arduino IDE** — there is no PlatformIO config, no Makefile, no CMake for the sketch.
 
-## Build
+## Build and verification
 
-- Entry point: `ePaperConversational.ino` — Arduino IDE compiles this + all `.cpp`/`.h`/`.c` files in project root and `src/`
-- No CI, no lint, no typecheck, no tests
-- Only verification: compile with Arduino IDE and flash to hardware
-- **LVGL setup**: use exactly one Arduino library named `lvgl`, version 9.x. Use the tracked `lv_conf.h` as the project configuration when installing it in the Arduino sketchbook.
-- **PSRAM must be enabled**: select `OPI PSRAM` in Arduino IDE for the ESP32-S3 board, and call `heap_caps_malloc_extmem_enable(256)` first in `setup()`
-- The firmware requires the Arduino build define `BOARD_HAS_PSRAM`; `ePaperConversational.ino` stops compilation if PSRAM is not enabled.
-- The board has 8MB flash. The current firmware fits the default 1.31MB application partition at about 1.25MB; use an 8MB or `Huge APP` partition if future features increase the image.
-- **Secrets setup**: `cp user_config_secrets.example.h user_config_secrets.h` then edit with real WiFi/api credentials
+- Sketch entry: `ePaperConversational.ino`. Arduino IDE compiles it plus every `.c`/`.cpp` in the project root and `src/`. **Any file you add to those directories is compiled**, even if nothing includes it.
+- **No CI, no lint, no typecheck, no tests.** The only verification is "compiles in Arduino IDE + flashes and runs on hardware". Do not claim a change is verified without that.
+- Required Arduino libraries (only two external): `lvgl` **9.x** (exactly one copy installed; use the tracked `lv_conf.h` as its config in the Arduino sketchbook) and `ArduinoWebsockets`. `multi_button`, `esp_codec_dev` and `codec_board` are vendored under `src/`.
+- **PSRAM is mandatory**: select `OPI PSRAM` for the board. `ePaperConversational.ino:7` `#error`s if `BOARD_HAS_PSRAM` is not defined. `setup()` calls `heap_caps_malloc_extmem_enable(256)` first.
+- 8MB flash. Image is ~1.25MB against the default 1.31MB app partition — nearly full. If you add features, expect to switch to an 8MB / `Huge APP` partition scheme. `lv_conf.h` deliberately disables unused LVGL widgets/themes/layouts/decoders/drivers/demos to stay under the limit; don't re-enable them casually.
+- **Secrets**: `cp user_config_secrets.example.h user_config_secrets.h`, then fill in real values. The real file is gitignored; the build fails without it (`user_config.h:76`).
+
+## Non-obvious gotchas
+
+- **`user_config.h` must be included before `<ArduinoWebsockets.h>`** (see `ws_client.cpp:3-4`). It defines `_WS_CONFIG_MAX_MESSAGE_SIZE` (512KB); reordering silently reverts to the library's small default and truncates PCM chunks.
+- **Dead code, still compiled**: `api_client.cpp`/`api_client.h` (REST/HTTPClient) and `minimp3.h` are not included by any live file. The REST path was replaced by WebSocket. Don't extend them; they only survive because Arduino compiles the folder. `api_client.cpp` is the reason `HTTPClient` is still linked.
+- **`API_BASE_URL` is an `http://host:port` URL** even though transport is WebSocket. `ws_client.cpp:368-377` parses host/port out of it and builds `ws://host:port/ws`.
+- **`specs/TechnicalSpec.md` is stale** — it describes a REST API. The code uses WebSocket. Trust the code.
+- **LED on GPIO 3 is active-low**: `LOW`=on, `HIGH`=off. `wifi_bsp.cpp:led_set()` already inverts; `wifi_led_write(true)` = LED on. Don't "fix" the polarity.
+- **PWR button bit order differs from BOOT**: `PWR_BIT_DOUBLE=2`/`PWR_BIT_UP=3` vs `BOOT_BIT_UP=2`/`BOOT_BIT_DOUBLE=3`. Use the named constants with `BTN_GET(ev, BIT)`.
+- **Beeps need leading silence**: I2S TX DMA needs ~50-70ms of priming samples or short beeps are completely inaudible. Every beep waveform starts with silence. Do not "optimize" it away.
+- **Use `audio_beep_play_standalone()`**, not `audio_beep_play()`. The latter writes directly to an already-open codec and fails after a close/reopen cycle (ES8311 DAC path does not re-enable).
+- **No ArduinoJson.** JSON is hand-parsed in `ws_client.cpp` (`parse_json_string` / `parse_json_int` / `parse_json_has_type`) using Arduino `String::indexOf`, with manual `\uXXXX` decoding. Adding ArduinoJson would blow the flash budget.
+- Built-in Montserrat 14 is disabled in `lv_conf.h`. The project font is `font_montserrat_latin_14.c` (14px/4bpp, ASCII + Latin-1 `0xA1-0xFF` for `ñ`, accented vowels, `¿`, `¡`). New glyphs require regenerating that file.
+- LVGL themes are disabled, so styled objects must set opacity explicitly (e.g. battery fill bars use `LV_OPA_COVER`).
 
 ## Architecture
 
-- **Single core (Core 1)**: all FreeRTOS tasks pinned to Core 1 via `xTaskCreatePinnedToCore(..., 1)`
-- **Task list** (name, priority, stack):
-  - `LVGL` (4, 8KB) — LVGL tick handler, render loop, owns the LVGL mutex
-  - `ws_task` (3, 20KB) — WebSocket connect/poll/send/receive, JSON parsing, audio buffer mgmt (needs 20KB due to String URL parsing + large local vars). Also writes incoming PCM chunks to the streaming ring buffer via `stream_buf_write()`.
-  - `stream_task` (5, 8KB) — **created dynamically on `audio_start`**; streaming audio playback: reads from ring buffer, writes to ES8311 codec, closes on `audio_end` or timeout
-  - `state_task` (3, 8KB) — state machine consuming `state_queue` events, drives screen transitions
-  - `button_task` (3, 4KB) — polls `boot_groups`/`pwr_groups` event bits, sends `AppEvent` to `state_queue`
-  - `touch_task` (3, 4KB) — **only created if FT6336 detected**; sends `AppEvent` to `state_queue`
-  - `wifi_task` (2, 4KB) — WiFi scan-and-connect loop: scans for known networks, picks strongest RSSI
-  - `bat_task` (1, 4KB) — periodic battery voltage read + status bar update
-  - `sleep_timer` (1, 4KB) — inactivity timer (60s), skips during LISTENING/RECEIVING/RESPONSE(when playing)
-- **State machine**: `AppState` enum with 6 states (`STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4, STATE_SETTINGS=5`), driven by `AppEvent` struct (`type` + `data`) on `state_queue`
-- **Event types**: `EVT_WS_CONNECTED`(1) `EVT_WS_DISCONNECTED`(2) `EVT_WS_ERROR`(3) `EVT_START_RECORDING`(4) `EVT_STOP_RECORDING`(5) `EVT_RECORDING_DONE`(6) `EVT_RESPONSE_READY`(7) `EVT_NEXT_MESSAGE`(8) `EVT_WS_RECONNECT`(9) `EVT_DISCARD`(10) `EVT_OPEN_SETTINGS`(11) `EVT_TOGGLE_LANGUAGE`(12) `EVT_EXIT_SETTINGS`(13)
-- **LVGL 9.x**: widget-based UI, 200x200 e-paper display, `LV_DISPLAY_RENDER_MODE_FULL` always
-  - **Mandatory**: lock LVGL mutex (`lvgl_lock(-1)` / `lvgl_unlock()`) before any widget operation from any task
-  - Screens: `lv_obj_create(NULL)` → build widgets → `lv_screen_load()` → `lv_timer_handler()` → `lv_obj_delete(old_scr)`
-  - Display port: `lv_display_create()` + RGB565 buffers in bytes + `lv_display_set_flush_cb()`
-  - Flush callback: `EPD_Clear()` → loop pixels → threshold RGB565 at `0x7FFF` → `EPD_DrawColorPixel()` → `EPD_DisplayPart()` → `lv_display_flush_ready()`
-  - 2 display buffers (80KB each) in SPIRAM, fallback to internal RAM if SPIRAM fails
-  - Touch: `lv_indev_touch_read_cb` reads from global `last_touch_x/y/pressed` set by `touch_task`
-  - `lv_tick_inc(5)` driven by `esp_timer` at 5ms period
-  - `lv_conf.h` disables unused widgets, themes, layouts, decoders, drivers, examples and demos to keep flash usage below the default partition limit.
-  - LVGL's 48KB allocator pool is created in SPIRAM with `LV_MEM_POOL_ALLOC`; the display buffers remain 80KB × 2 in SPIRAM.
-  - The built-in Montserrat 14 font is disabled. `font_montserrat_latin_14.c` is the project font, generated at 14px/4bpp with ASCII plus Latin-1 (`0xA1-0xFF`) for `ñ`, accented vowels, `¿` and `¡`.
-- **WebSocket communication** (not REST): all audio/data flows through a single WebSocket to `ws://<host>:<port>/ws`
-  - Binary messages = PCM audio chunks from backend (streaming); text messages = JSON status/token/text/done/error and streaming control (`audio_start`/`audio_end`)
-  - Client sends: binary WAV audio + `{"type":"audio_end"}` text message
-  - **Streaming audio protocol** (backend → client):
-    - `{"type":"audio_start","sample_rate":24000,"channels":1,"bits":16}` — begins a PCM stream. Client creates a 512KB PSRAM ring buffer and spawns `stream_playback_task` (priority 5)
-    - Binary PCM chunks (typically 32KB each) — client writes to ring buffer via `stream_buf_write()`. Blocks with `STREAM_TIMEOUT_MS` (10s) if buffer is full (backpressure via TCP window)
-    - `{"type":"audio_end"}` — signals end of stream. Client calls `stream_buf_signal_end()`. Playback task drains remaining data and closes codec
-    - `{"type":"done"}` — triggers `EVT_RESPONSE_READY`, transitions UI to `STATE_RESPONSE` (audio may already be playing or finished)
-    - **Backend must send chunks at real-time speed** (~48KB/s for 24000Hz mono 16-bit), interleaving text JSON messages between binary chunks. Burst sends will cause TCP backpressure blocking
-    - Receiving text is coalesced by an LVGL timer so UI refreshes do not block PCM reception
-  - Thread-safe via `ws_cmd_queue` (FreeRTOS queue of `WsCmd` struct)
-  - **No ArduinoJson** — JSON parsed with hand-rolled `parse_json_string()` via `String::indexOf` (requires Arduino's String class)
-  - `WiFi.setSleep(false)` in `ws_task` to keep radio alive
+All FreeRTOS tasks are pinned to **Core 1** (`xTaskCreatePinnedToCore(..., 1)`).
 
-- **Streaming audio playback** (`audio_stream.h`/`.cpp`, `audio_bsp.cpp:stream_playback_task`):
-  - **Ring buffer** (`audio_stream.cpp`): 512KB circular buffer in PSRAM (`STREAM_BUF_SIZE`), single-producer (WS callback) / single-consumer (playback task)
-  - **Blocking writes**: `stream_buf_write(data, len, timeout_ms)` blocks up to `timeout_ms` if buffer is full, using a binary semaphore signaled by the reader. Provides natural TCP backpressure
-  - **Playback task** (`stream_playback_task`, priority 5): spawned by `audio_stream_playback_start()` when `audio_start` JSON arrives
-    - Waits for min fill threshold (`STREAM_MIN_FILL_BYTES` = 24KB, ~0.5s) or `audio_end` signal
-    - Opens ES8311 codec at the specified sample rate/channels/bits
-    - Reads 1KB frame-aligned chunks from ring buffer and retries transient codec/I2S write errors; the blocking I2S write gives `ws_task` priority 3 time to run without an extra fixed delay
-    - On `stream_buf_is_ended()` + empty buffer: closes codec, frees ring buffer, sets `wav_playing = false`
-    - On `wav_stop_flag`: aborts immediately (triggered by `audio_play_wav_stop()`)
-    - Timeout: aborts if no data for `STREAM_TIMEOUT_MS` (10s) from last successful codec write
-  - **Fallback path**: if backend sends a single binary WAV/PCM without `audio_start`/`audio_end` protocol, `switch_state(STATE_RESPONSE)` checks `!audio_wav_is_playing()` and falls back to `audio_play_wav_start()`/`audio_play_pcm_start()` with the old full-buffer approach
-  - **Cleanup on error/disconnect**: `STATE_RECEIVING` handlers call `audio_play_wav_stop()` + `ws_free_audio_buffer()` (frees ring buffer via `stream_buf_free()`) before transitioning
-  - **Config constants** (`user_config.h`): `STREAM_BUF_SIZE` (524288), `STREAM_MIN_FILL_BYTES` (24000), `STREAM_TIMEOUT_MS` (10000)
+| Task | Prio | Stack | Notes |
+|------|------|-------|-------|
+| `LVGL` | 4 | 8KB | render loop; owns the LVGL mutex |
+| `ws_task` | 3 | 20KB | WS connect/poll/send, JSON parsing; 20KB is needed for `String` URL parsing + large locals |
+| `stream_task` | 5 | 8KB | created dynamically on `audio_start`, exits on `audio_end`/timeout |
+| `state_task` | 3 | 8KB | consumes `state_queue`, drives screen transitions |
+| `btn_task` | 3 | 4KB | polls `boot_groups`/`pwr_groups` event bits |
+| `touch_task` | 3 | 4KB | **only created if FT6336 is detected at I2C `0x38`** (`hasTouch`) |
+| `wifi_task` | 2 | 4KB | reconnect loop |
+| `bat_task` | 1 | 4KB | battery read + status bar |
+| `sleep_timer` | 1 | 4KB | 60s inactivity timer |
 
-- **Deep sleep**: `RTC_DATA_ATTR` vars: `boot_count`, `sleep_counter`, `g_lang_index` (language index for multi-language persistence)
-  - Wake causes: `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (60 min)
-  - Two entry paths: `enter_deep_sleep()` (full EPD refresh + `EPD_Display()`) and `enter_deep_sleep_light()` (no display refresh, used for timer auto-wake)
-  - `rtc_gpio_hold_en(GPIO_NUM_17)` to keep VBAT powered
-- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL allocator pool and buffers (48KB + 80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB). The LVGL pool additionally requires `MALLOC_CAP_8BIT`.
+### LVGL
 
-## Key conventions
+- **Always take the LVGL mutex** (`lvgl_lock(-1)` / `lvgl_unlock()`) before touching any widget from any task.
+- Screen swap pattern: `create_screen_*()` → `lv_screen_load()` → `lv_timer_handler()` → `lv_obj_delete(old_scr)` (see `switch_state()` in `user_app.cpp`).
+- `LV_DISPLAY_RENDER_MODE_FULL`, RGB565, 2 buffers of 80KB in SPIRAM (fallback to internal RAM). LVGL's 48KB pool is also SPIRAM via `LV_MEM_POOL_ALLOC` (needs `MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT`).
+- Flush cb (`user_app.cpp:297`): `EPD_Clear()` → threshold each RGB565 pixel at `0x7fff` → `EPD_DrawColorPixel()` → `EPD_DisplayPart()` → `lv_display_flush_ready()`.
+- Partial refresh everywhere; full refresh (`EPD_Init()` + `EPD_Display()`) only in `enter_deep_sleep()`.
+- Touch feeds LVGL through a lock-free ring buffer (`touch_sample_push`/`touch_sample_pop`) and sets `data->continue_reading`, not just the `last_touch_*` globals (those are the fallback).
+- `lv_tick_inc(5)` from an `esp_timer` at 5ms.
 
-- 2 buttons: **BOOT** (GPIO 0) = primary action, **PWR** (GPIO 18) = secondary/cancel
-- Button events via `EventGroupHandle_t` (`boot_groups`, `pwr_groups`) — use `BTN_GET(ev, BIT)` with `BOOT_BIT_SINGLE/LONG/UP/DOUBLE` and `PWR_BIT_SINGLE/LONG/UP/DOUBLE`
-  - **Watch out**: PWR bits have different order than BOOT (`PWR_BIT_DOUBLE=2` vs `BOOT_BIT_UP=2`, `PWR_BIT_UP=3` vs `BOOT_BIT_DOUBLE=3`)
-- Button behavior per state:
-  - **Global**: PWR long → deep sleep (any state, overrides per-state behavior)
-  - `STATE_RECORD`: BOOT single → `EVT_START_RECORDING`; PWR single → `EVT_OPEN_SETTINGS`
-  - `STATE_LISTENING`: BOOT single → `EVT_STOP_RECORDING`; PWR single → `EVT_DISCARD`
-  - `STATE_RESPONSE`: BOOT single → `EVT_NEXT_MESSAGE` (continues conversation); PWR single → `EVT_WS_RECONNECT`
-  - `STATE_SETTINGS`: BOOT single → `EVT_TOGGLE_LANGUAGE` (rotates language); PWR single → `EVT_EXIT_SETTINGS` (back to RECORD)
-  - `STATE_CONNECTING` and `STATE_RECEIVING`: buttons have no effect
-- Touch behavior per state: `STATE_RECORD` → sends `EVT_START_RECORDING`; `STATE_LISTENING` → sends `EVT_STOP_RECORDING`
-- Audio recording: 16kHz 16-bit stereo, max 30 seconds (~1.92MB PSRAM buffer). Auto-discards on timeout (`EVT_RECORDING_DONE` with empty buffer → back to RECORD). Recording runs in a FreeRTOS task (`rec_task_handle`).
-- Battery measurement: ADC1_CH3/GPIO4 at 12dB with curve-fitting calibration and a 1:2 divider. `battery_get_status()` averages 16 samples spaced by 2ms, discards two samples at each extreme, and maps the result through a LiPo voltage curve (`4.12V=100%`, `3.30V=0%`).
-- Battery UI: the voltage and percentage label use the same averaged reading. Four fill bars use thresholds of 1-25%, 26-50%, 51-75% and 76-100%; every fill object explicitly uses `LV_OPA_COVER` because LVGL themes are disabled.
-- Partial refresh (`EPD_DisplayPart()`) for normal operation; full refresh (`EPD_Display()` after `EPD_Init()`) only in `enter_deep_sleep()` before deep sleep
-- Touch detection: runtime-probed via I2C at `0x38` (FT6336), flag `hasTouch` set; `touch_task` only created if `hasTouch == true`
-- Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`). Runs normally in `STATE_SETTINGS` (will deep sleep after 60s idle).
-- **LED (GPIO 3) is active-low**: `LOW` (0) = ON, `HIGH` (1) = OFF. Don't change the polarity logic in `wifi_bsp.cpp:led_set()` — `wifi_led_write(true)` means "LED on" (writes 0) and `wifi_led_write(false)` means "LED off" (writes 1).
-- **LED control**: managed by `ws_task` (blinks at 200ms while `STATE_CONNECTING`) and `switch_state()` (turns off when leaving `STATE_CONNECTING`). `wifi_task` no longer touches the LED.
-- **Multi-WiFi**: `WIFI_NETWORKS` macro in `user_config_secrets.h` defines a list of `{ "SSID", "password" }` pairs with `WIFI_NETWORK_COUNT`. On boot and every disconnect, `wifi_connect_best()` scans all visible APs, filters to known SSIDs, picks the one with strongest RSSI (dBm), and connects via `WiFi.begin()`. Has a guard at the top (`if (WiFi.status() == WL_CONNECTED) return;`) to prevent re-scanning while connected (avoids WS drop from transient status flickers). **Synchronous/blocking**: `wifi_init()` calls `wifi_connect_best()` which blocks up to `WIFI_CONNECT_TIMEOUT_MS` (10s) waiting for connection — unlike old async `WiFi.begin()`. `wifi_task` calls `wifi_connect_best()` on every disconnect (replacing old `WiFi.reconnect()`). Falls back to rescan every 5s if no known networks are in range.
-- **Boot screen flow**: `lvgl_port_init()` (idempotent, static guard) is called inside `user_app_init()` right after display init and BEFORE any FreeRTOS tasks — ensures LVGL display driver is registered before `state_task` can call `switch_state()`. `user_ui_init()` (also idempotent) is called right after, loading "Conectando..." screen immediately (before the blocking `wifi_init()`), so the user sees something during WiFi scan instead of blank screen. After `setup()` releases LVGL lock, `switch_state(g_app_state)` is called to re-sync the screen in case `state_task` already transitioned (fixes race where `user_ui_init()` overwrites the correct screen).
-- **Beep notification sounds**: short audio chirps played to indicate state transitions:
-  - `AUDIO_BEEP_START` (800 Hz): plays when entering `STATE_LISTENING` (recording begins). 200ms total (70ms silence + 130ms tone) at 24000Hz mono 16-bit.
-  - `AUDIO_BEEP_STOP` (500→800 Hz ascending two-tone): plays after recording stops, before sending audio to WebSocket. 200ms total (50ms silence + 75ms@500Hz + 75ms@800Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
-  - `AUDIO_BEEP_DISCARD` (300 Hz): plays when recording is discarded via PWR button (`EVT_DISCARD`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
-  - `AUDIO_BEEP_RECONNECT` (1000 Hz): plays when PWR is pressed during `STATE_RESPONSE` to reconnect WebSocket (`EVT_WS_RECONNECT`). 400ms total (70ms silence + 330ms tone) at 24000Hz mono 16-bit.
-  - `AUDIO_BEEP_SLEEP` (900→600 Hz descending two-tone): plays when entering deep sleep (`enter_deep_sleep()`). 250ms total (50ms silence + 100ms@900Hz + 100ms@600Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000).
-  - `AUDIO_BEEP_WAKE` (600→900 Hz ascending two-tone): plays on wake from deep sleep via button (`ESP_SLEEP_WAKEUP_EXT1`) or other non-timer wake. 250ms total (50ms silence + 100ms@600Hz + 100ms@900Hz) at 24000Hz mono 16-bit, half volume (amplitude 4000). Similar to Windows device connect/disconnect sounds.
-  - All use `audio_beep_play_standalone()` (`audio_bsp.cpp`) which generates a WAV in heap and plays it via `audio_play_wav_start()` → `wav_playback_task`. This is the **same codec path as the response audio**, ensuring reliable I2S TX DMA initialization.
-  - **Silence padding is critical**: the I2S TX DMA needs ~50-70ms of priming data before audio becomes audible. Without leading silence, short beeps (<200ms) are completely inaudible because the DMA never starts transmitting before the codec is closed.
-  - `audio_beep_play()` (`audio_bsp.cpp`): alternative direct-write variant (writes PCM via `esp_codec_dev_write()` to an already-open codec). Only works when codec is freshly opened — **do not use after close/reopen cycles** as the ES8311 DAC path may not re-enable.
-  - Beep integration points in `user_app.cpp`:
-    - Start beep: `switch_state(STATE_LISTENING)` → `audio_beep_play_standalone(AUDIO_BEEP_START)` → `audio_play_init()` → `audio_start_recording()`
-    - Stop beep: `EVT_STOP_RECORDING` handler → `audio_stop_recording()` → `audio_beep_play_standalone(AUDIO_BEEP_STOP)` → send WAV
-    - Discard beep: `EVT_DISCARD` handler → `audio_stop_recording_no_close()` → `audio_beep_play_standalone(AUDIO_BEEP_DISCARD)` → `audio_discard_recording()` → `STATE_RECORD`
-    - Reconnect beep: `EVT_WS_RECONNECT` handler → `audio_play_wav_stop()` → `ws_free_audio_buffer()` → `audio_beep_play_standalone(AUDIO_BEEP_RECONNECT)` → `ws_request_reconnect()` → `STATE_CONNECTING`
-    - Sleep beep: `enter_deep_sleep()` → `audio_beep_play_standalone(AUDIO_BEEP_SLEEP)` → display + deep sleep
-    - Wake beep: `setup()` (EXT1/other wake) sets `g_play_wake_beep = true` **before** `user_app_init()` → `state_task` on `EVT_WS_CONNECTED` → `audio_beep_play_standalone(AUDIO_BEEP_WAKE)` → `g_play_wake_beep = false` → `switch_state(STATE_RECORD)`. Only plays on wake-from-sleep, not on first boot or WS reconnects. Flag must be set before tasks start to avoid race with `EVT_WS_CONNECTED`.
-  - Helper functions: `audio_stop_recording_no_close()` (stops recording task, keeps codec open), `audio_close_codec()` (closes both playback+record handles).
+### Boot sequence (race-sensitive)
 
-- **Multi-language (i18n)**: `LangMessages` struct in `messages.h` with `name` field (self-describing) + 15 display string fields. Two language tables defined: `MSG_ES` (Spanish) and `MSG_EN` (English). Global pointer `currentLang` set by `lang_init()` (called at top of `setup()`) based on `RTC_DATA_ATTR g_lang_index`. `lang_toggle()` rotates through `lang_table[]` array — to add a new language, define `MSG_XX`, declare `extern`, and append to `lang_table[]` (auto-count via `sizeof`). Settings screen shows current language name via `lang_get_name()`. Language persists across deep sleep. All UI screens and status bar read strings via `currentLang->field_name`.
+`lvgl_port_init()` and `user_ui_init()` are both idempotent (static guards) and are called **inside `user_app_init()` before any task is created** — the display driver must be registered before `state_task` can call `switch_state()`. `user_ui_init()` loads the "connecting" screen before the **blocking** `wifi_init()` so the screen isn't blank during the WiFi scan. `setup()` then calls `switch_state(g_app_state)` if the state already advanced past `STATE_CONNECTING`, to undo the race where `user_ui_init()` overwrote the correct screen.
+
+### State machine
+
+`AppState`: `STATE_CONNECTING=0, STATE_RECORD=1, STATE_LISTENING=2, STATE_RECEIVING=3, STATE_RESPONSE=4, STATE_SETTINGS=5` (`user_app.h`).
+`AppEvent { uint8_t type; uint8_t data; }` on `state_queue`; event IDs are `#define`s 1..13 in `user_app.h:26-38`.
+
+```
+CONNECTING ──[EVT_WS_CONNECTED]──▶ RECORD ──[EVT_START_RECORDING]──▶ LISTENING
+     ▲                               ▲  ▲                                │
+     │                               │  └──[empty WAV]───┐    [stop + valid WAV]
+     │                               │                   │               ▼
+     │◀──[WS disconnect / error from any state]──────────┴────────── RECEIVING
+     │                                                                   │
+     │                                                        [EVT_RESPONSE_READY]
+     │                                                                   ▼
+     └──────────────[EVT_WS_RECONNECT]──────────────────────────────  RESPONSE
+                                                                        │
+RECORD ◀──[EVT_EXIT_SETTINGS]── SETTINGS ◀──[EVT_OPEN_SETTINGS]── RECORD│
+SETTINGS ──[EVT_TOGGLE_LANGUAGE]──▶ SETTINGS (re-render)                │
+LISTENING ◀──────────────────[EVT_NEXT_MESSAGE]─────────────────────────┘
+```
+
+Buttons — **BOOT** (GPIO 0) = primary, **PWR** (GPIO 18) = secondary/cancel:
+
+| State | BOOT single | PWR single |
+|-------|-------------|------------|
+| `RECORD` | `EVT_START_RECORDING` | `EVT_OPEN_SETTINGS` |
+| `LISTENING` | `EVT_STOP_RECORDING` | `EVT_DISCARD` |
+| `RESPONSE` | `EVT_NEXT_MESSAGE` | `EVT_WS_RECONNECT` |
+| `SETTINGS` | `EVT_TOGGLE_LANGUAGE` | `EVT_EXIT_SETTINGS` |
+| `CONNECTING`, `RECEIVING` | ignored | ignored |
+
+PWR **long** → deep sleep from any state (checked before the per-state switch). Touch: `RECORD` → `EVT_START_RECORDING`, `LISTENING` → `EVT_STOP_RECORDING`.
+
+### WebSocket protocol
+
+Single WS to `ws://<host>:<port>/ws`. Binary frames = PCM audio from backend; text frames = JSON.
+
+Client → backend: binary WAV, then `{"type":"audio_end"}`. Commands are marshalled onto `ws_cmd_queue` (`WsCmd`) so other tasks never touch the socket. `WiFi.setSleep(false)` in `ws_task`.
+
+Backend → client streaming sequence:
+1. `{"type":"audio_start","sample_rate":24000,"channels":1,"bits":16}` — allocates the 512KB PSRAM ring buffer and spawns `stream_task`.
+2. Binary PCM chunks (~32KB) → `stream_buf_write()`, which **blocks up to `STREAM_TIMEOUT_MS` when full** (deliberate TCP backpressure).
+3. `{"type":"audio_end"}` → `stream_buf_signal_end()`; playback drains then closes the codec.
+4. `{"type":"done"}` → `EVT_RESPONSE_READY` → `STATE_RESPONSE` (audio may still be playing).
+
+**The backend must pace chunks at real time** (~48KB/s for 24kHz mono 16-bit) and interleave text JSON between binary frames; bursting stalls the socket.
+Incoming `status`/`token` text goes through `queue_screen_receiving_status()`, which coalesces via an LVGL timer so UI redraws don't block PCM reception.
+
+### Streaming audio playback
+
+`audio_stream.{h,cpp}` (ring buffer) + `audio_bsp.cpp:stream_playback_task`.
+
+- 512KB PSRAM circular buffer, single producer (`onMessageCallback`) / single consumer (playback task); blocking writes gated by a binary semaphore the reader signals.
+- Playback waits for `STREAM_MIN_FILL_BYTES` (24KB, ~0.5s) or `audio_end`, opens ES8311 at the negotiated format, then writes 1KB frame-aligned chunks and retries transient I2S errors. The blocking I2S write is what yields to `ws_task` — do not add a fixed delay.
+- Ends on `stream_buf_is_ended()` + empty buffer; aborts on `wav_stop_flag` (`audio_play_wav_stop()`) or `STREAM_TIMEOUT_MS` with no successful write.
+- **Fallback**: a lone binary WAV/PCM with no `audio_start`/`audio_end` is handled in `switch_state(STATE_RESPONSE)` via `!audio_wav_is_playing()` → `audio_play_wav_start()`/`audio_play_pcm_start()` (old full-buffer path).
+- Any error/disconnect handler in `STATE_RECEIVING` must call `audio_play_wav_stop()` **and** `ws_free_audio_buffer()` (which frees the ring buffer) before transitioning.
+
+### Audio recording and beeps
+
+- Recording: 16kHz 16-bit **stereo**, max 30s → ~1.92MB PSRAM buffer (`REC_BUFFER_SIZE`), runs in `rec_task`. Timeout emits `EVT_RECORDING_DONE` with an empty buffer → back to `RECORD`.
+- Beep IDs in `audio_bsp.h`: `AUDIO_BEEP_START` / `STOP` / `DISCARD` / `RECONNECT` / `SLEEP` / `WAKE`. All generated in heap and played through `audio_play_wav_start()` → `wav_playback_task`, i.e. the same codec path as response audio (that is what makes I2S TX DMA init reliable).
+- Wake beep: `setup()` sets `g_play_wake_beep = true` **before** `user_app_init()`; `state_task` consumes it on `EVT_WS_CONNECTED`. Setting it later races with the event.
+- Helpers: `audio_stop_recording_no_close()` (stop task, keep codec open), `audio_close_codec()` (close playback + record handles).
+
+### Power, WiFi, i18n
+
+- Deep sleep: `RTC_DATA_ATTR` `boot_count`, `sleep_counter`, `g_lang_index`. Wake on `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (`SLEEP_DURATION_SEC`, 3600s). `enter_deep_sleep()` does a full EPD refresh; `enter_deep_sleep_light()` skips it (timer auto-wake path). `rtc_gpio_hold_en(GPIO_NUM_17)` keeps VBAT powered.
+- Inactivity timer (60s) pauses in `LISTENING`, `RECEIVING`, and `RESPONSE` while `audio_wav_is_playing()`. It does **not** pause in `SETTINGS`.
+- Multi-WiFi: `WIFI_NETWORKS` / `WIFI_NETWORK_COUNT` in the secrets header. `wifi_connect_best()` scans, filters to known SSIDs, picks strongest RSSI. It early-returns if already `WL_CONNECTED` (prevents scan-induced WS drops) and **blocks** up to `WIFI_CONNECT_TIMEOUT_MS` (10s). `wifi_task` calls it on every disconnect; rescans every 5s if nothing known is in range.
+- LED is driven only by `ws_task` (200ms blink while `STATE_CONNECTING`) and `switch_state()` (off when leaving `CONNECTING`). `wifi_task` must not touch it.
+- i18n: `LangMessages` in `messages.h` — a `name` field plus 15 UI strings. Tables `MSG_ES`, `MSG_EN`; `currentLang` set by `lang_init()` (first call in `setup()`) from `g_lang_index`; `lang_toggle()` rotates `lang_table[]` (count derived via `sizeof`). To add a language: define `MSG_XX`, `extern` it, append to `lang_table[]`. All UI reads `currentLang->field`.
+- Battery: ADC1_CH3 / GPIO4, 12dB, curve-fit calibration, 1:2 divider. `battery_get_status()` averages 16 samples 2ms apart, trims 2 at each extreme, maps through a LiPo curve (`4.12V`=100%, `3.30V`=0%). The label and the 4 fill bars (25% steps) share that one reading.
 
 ## Config and secrets
 
-Configuration is split into two files:
-
-- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings, WiFi timeout and battery sampling/curve constants. **When adding new config constants, add them here.**
-- **`user_config_secrets.h`** — gitignored (not tracked). Contains the secret defines: `WIFI_NETWORKS` (multi-WiFi list with SSID+password pairs), `WIFI_NETWORK_COUNT`, `API_BASE_URL`. `user_config.h` includes this file at the end.
-- **`user_config_secrets.example.h`** — tracked template with dummy values. New clones: `cp user_config_secrets.example.h user_config_secrets.h` and edit with real values.
-
-**Rule**: if a new constant is NOT a secret (no passwords, keys, personal IPs/URLs), put it in `user_config.h` only. If it IS a secret, add it to BOTH `user_config_secrets.h` and `user_config_secrets.example.h` (with a dummy in the example).
+- **`user_config.h`** (tracked) — every non-secret constant: pins, timings, SPI/I2C, display, streaming (`STREAM_BUF_SIZE`, `STREAM_MIN_FILL_BYTES`, `STREAM_TIMEOUT_MS`), WS (`WS_REQUEST_TIMEOUT_MS`, `AGENT_TEXT_SIZE`, `_WS_CONFIG_MAX_MESSAGE_SIZE`), WiFi timeout, battery curve. **New non-secret constants go here and nowhere else.**
+- **`user_config_secrets.h`** (gitignored) — `WIFI_NETWORKS`, `WIFI_NETWORK_COUNT`, `API_BASE_URL`. Included at the bottom of `user_config.h`.
+- **`user_config_secrets.example.h`** (tracked) — dummy template. A new secret must be added to **both** the real header and the example.
 
 ## Directory map
 
-| Directory | Purpose |
-|-----------|---------|
-| `src/display/` | E-paper SPI driver (`epaper_driver_display`) |
-| `src/power/` | GPIO power control for EPD, audio, VBAT |
-| `src/button_bsp/` | Multi-button press detection (`multi_button` lib) |
-| `src/touch_bsp/` | FT6336 touch controller driver |
-| `src/i2c_bsp/` | I2C bus initialization (SDA=47, SCL=48) |
-| `src/battery/` | ADC battery voltage measurement |
-| `src/codec_board/` | ES8311 codec init (wraps `esp_codec_dev`) |
-| `src/esp_codec_dev/` | External codec library (v1.3.5, ESP-IDF component) |
-| `src/ui/screens.cpp` | 7 screen creation functions + receiving status updater + settings screen |
-| `src/ui/status_bar.cpp` | WiFi + battery status bar widget |
-| `font_montserrat_latin_14.c` | Project-generated 14px Montserrat font with Latin-1 glyphs |
-| `audio_stream.h` / `audio_stream.cpp` | Streaming ring buffer: 512KB PSRAM circular buffer with blocking writes + binary semaphore backpressure |
-| `ws_client.h` / `ws_client.cpp` | WebSocket client: connect, send/receive, JSON parsing, audio buffer mgmt, streaming protocol handling |
-| `audio_bsp.h` / `audio_bsp.cpp` | ES8311 codec control, recording task, WAV/PCM playback tasks, streaming playback init |
-| `messages.h` / `messages.cpp` | Multi-language string tables (`MSG_ES`, `MSG_EN`), `RTC_DATA_ATTR g_lang_index`, `lang_init()`/`lang_toggle()` for runtime language switching persisting across deep sleep |
-| `user_config.h` | All non-secret configuration constants including streaming params |
-| `specs/` | TechnicalSpec.md and ImplementationPlan.md (design docs — **note: architecture has diverged**; spec describes REST API but code uses WebSocket) |
-
-## State transition diagram (actual code)
-
-```
-CONNECTING ──[WS connected]──▶ RECORD ──[start recording]──▶ LISTENING
-    ▲                              ▲         │                    │
-    │                              │         │           [stop/done + valid WAV]
-    │  [WS disconnect from         │         │                    ▼
-    │   RECORD/LISTENING/          │◀──[empty WAV]─── RECEIVING ──[response ready]──▶ RESPONSE
-    │   RECEIVING/RESPONSE/        │         │                        │
-    │   SETTINGS]                  │    [WS error] ──────────────────┘
-    │                              │    [WS disconnect]
-    │                              │
-    └──────────────────────────────┘
-    
-    RECORD ──[PWR single]──▶ SETTINGS
-    SETTINGS ──[PWR single]──▶ RECORD
-    SETTINGS ──[BOOT single]──▶ SETTINGS (toggle language, re-render)
-
-RESPONSE ──[next message]──▶ LISTENING (continue conversation)
-RESPONSE ──[reconnect]───▶ CONNECTING
-``` |
+| Path | Purpose |
+|------|---------|
+| `ePaperConversational.ino` | `setup()`/`loop()`, wake-cause dispatch, PSRAM guard |
+| `user_app.{h,cpp}` | LVGL port, state machine, tasks, buttons, touch, deep sleep |
+| `ws_client.{h,cpp}` | WebSocket client, hand-rolled JSON, audio buffer + streaming protocol |
+| `audio_stream.{h,cpp}` | 512KB PSRAM ring buffer with blocking writes / semaphore backpressure |
+| `audio_bsp.{h,cpp}` | ES8311 control, recording task, WAV/PCM/stream playback tasks, beeps |
+| `messages.{h,cpp}` | `MSG_ES`/`MSG_EN` tables, `g_lang_index`, `lang_init()`/`lang_toggle()` |
+| `wifi_bsp.{h,cpp}` | Multi-WiFi scan/connect, LED, status-bar updates |
+| `user_config.h` | All non-secret config |
+| `lv_conf.h` | LVGL 9 config — must be copied into the Arduino `lvgl` library |
+| `font_montserrat_latin_14.c` | Project font (14px/4bpp, ASCII + Latin-1) |
+| `src/ui/screens.cpp` | 7 `create_screen_*()` functions + coalesced receiving-status updater |
+| `src/ui/status_bar.cpp` | WiFi + battery status bar |
+| `src/display/` | E-paper SPI driver (`epaper_driver_display` class in `epaper_driver_bsp.*`) |
+| `src/power/` | GPIO power rails for EPD / audio / VBAT |
+| `src/button_bsp/` | Vendored `multi_button` + press detection |
+| `src/touch_bsp/` | FT6336 driver |
+| `src/i2c_bsp/` | I2C bus init (SDA=47, SCL=48) |
+| `src/battery/` | ADC battery measurement |
+| `src/codec_board/`, `src/esp_codec_dev/` | Vendored ESP-IDF codec components (esp_codec_dev v1.3.5) |
+| `api_client.*`, `minimp3.h` | **Dead** — unused REST client and MP3 decoder |
+| `specs/TechnicalSpec.md` | **Stale** design doc (describes REST, not WebSocket) |
