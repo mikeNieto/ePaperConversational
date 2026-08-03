@@ -1,1010 +1,848 @@
-# Especificacion Tecnica y Funcional
+# Technical and Functional Specification
 
-## Dispositivo: Waveshare ESP32-S3-Touch-ePaper-1.54
-
----
-
-# PARTE 1: ESPECIFICACION FUNCIONAL
-
-## 1. Descripcion General
-
-Aplicacion de firmware para Arduino IDE sobre el dispositivo Waveshare ESP32-S3-Touch-ePaper-1.54. El dispositivo actua como interfaz conversacional por voz: graba mensajes de audio del usuario, los envia a un backend REST para transcripcion (STT), procesamiento por agente IA (Chat) y sintesis de voz (TTS), luego reproduce la respuesta de audio.
-
-El firmware detecta automaticamente si el hardware posee controlador touch (FT6336). Si esta presente, habilita interaccion tactil en todas las pantallas que lo requieran. Si no esta presente, solo los botones fisicos PWR y BOOT estan disponibles para la navegacion.
+## Device: Waveshare ESP32-S3-Touch-ePaper-1.54
 
 ---
 
-## 2. Estados y Pantallas
+# PART 1: FUNCTIONAL SPECIFICATION
 
-El dispositivo tiene **8 pantallas/estados** numerados del 0 al 7:
+## 1. Overview
 
-### Pantalla 0 — Deep Sleep
-
-```
-+--------------------------------------+
-|                                      |
-|                                      |
-|                                      |
-|           Durmiendo...   N           |
-|                                      |
-|                                      |
-+--------------------------------------+
-```
-
-- **N** = contador de ciclos de sleep sin intervencion del usuario. Cuando el usuario despierta el dispositivo manualmente con PWR o BOOT, este contador se reinicia a 0.
-- Esta pantalla se muestra al entrar en deep sleep y cada vez que el dispositivo se auto-despierta (al expirar el timer de 60 minutos, sin intervencion del usuario).
-- **Cada vez que se entra a deep sleep** (ya sea por inactividad o por auto-despertar), se ejecuta un full refresh de la pantalla antes de dormir para dejar el display completamente blanco y libre de ghosting.
-- Al auto-despertarse: limpia completamente la pantalla en blanco con full refresh, incrementa N, redibuja esta misma pantalla, y vuelve a entrar en deep sleep por otros 60 minutos.
-- NOTA: En esta pantalla NO se muestra la barra de estado (WiFi ni bateria), ya que el dispositivo esta en deep sleep con las radios y perifericos apagados.
-
-### Pantalla 1 — Activo (Seleccion de Conversacion)
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|         +-------------------------+         |
-|         | Continuar Conversacion  |         |
-|         +-------------------------+         |
-|                                             |
-|         +-------------------------+         |
-|         |   Nueva Conversacion    |         |
-|         +-------------------------+         |
-|                                             |
-+---------------------------------------------+
-```
-
-- Muestra dos botones en pantalla: "Continuar Conversacion" y "Nueva Conversacion".
-- Por defecto, la opcion "Continuar Conversacion" esta seleccionada (resaltada visualmente).
-- Si el UUID de conversacion es nulo (primera instalacion del firmware), solo se muestra el boton "Nueva Conversacion".
-
-**Interaccion tactil:**
-- Toque simple en cualquiera de los dos botones → navega a la Pantalla 2 con la opcion elegida.
-
-**Interaccion por botones fisicos:**
-- **BOOT (doble click):** Cambia la seleccion entre los dos botones (toggle).
-- **BOOT (click simple):** Activa la opcion actualmente seleccionada → navega a Pantalla 2.
-- **PWR:** Sin efecto en esta pantalla.
-
-### Pantalla 2 — Grabar Mensaje
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|                                             |
-|             Grabar Mensaje                  |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- Mensaje "Grabar Mensaje" centrado en pantalla.
-
-**Interaccion por botones fisicos:**
-- **BOOT (click simple):** Inicia grabacion → transita a Pantalla 2b ("Escuchando...").
-- **PWR (click simple):** Vuelve a Pantalla 1 (Activo).
-
-**Interaccion tactil:**
-- Toque en cualquier parte de la pantalla → inicia grabacion → transita a Pantalla 2b.
-
-### Pantalla 2b — Escuchando... (Grabacion en curso)
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|                                             |
-|             Escuchando...                   |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- Estado de grabacion activa. El dispositivo esta capturando audio del microfono.
-- Duracion maxima de grabacion: **30 segundos**.
-- Al alcanzar los 30 segundos sin intervencion del usuario, el mensaje se considera incorrecto y se descarta automaticamente → transita a Pantalla 3b ("Mensaje descartado!!") por 1.5 segundos → vuelve a Pantalla 2 ("Grabar Mensaje").
-
-**Interaccion por botones fisicos:**
-- **BOOT (click simple):** Detiene grabacion y envia el audio → transita a Pantalla 3 ("Enviando Mensaje...").
-- **PWR (click simple):** Descarta la grabacion → transita a Pantalla 3b ("Mensaje descartado!!") por 1.5 segundos → vuelve a Pantalla 2 ("Grabar Mensaje").
-
-**Interaccion tactil:**
-- Toque en pantalla: equivalente a BOOT (detiene y envia) → transita a Pantalla 3.
-
-### Pantalla 3 — Enviando Mensaje...
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|                                             |
-|           Enviando Mensaje...               |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- El audio grabado se esta enviando al endpoint `/api/audio/transcribe`.
-- El dispositivo espera la respuesta del STT.
-- **NOTA:** Durante esta pantalla el contador de inactividad para deep sleep (60s) esta **PAUSADO**.
-
-### Pantalla 4 — Confirmacion de Transcripcion
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|   [texto transcrito en idioma original]     |
-|   (posiblemente multilinea, centrado)       |
-|                                             |
-|         +-------------------------+         |
-|         |         Enviar          |         |
-|         +-------------------------+         |
-|                                             |
-|         +-------------------------+         |
-|         |        Cancelar         |         |
-|         +-------------------------+         |
-|                                             |
-+---------------------------------------------+
-```
-
-- Muestra el texto transcrito devuelto por el STT (campo `text` de la respuesta).
-- Dos botones: "Enviar" y "Cancelar".
-- "Enviar" seleccionado por defecto.
-
-**Interaccion tactil:**
-- Toque en "Enviar" → envia el texto al endpoint `/api/chat/message` → transita a Pantalla 5.
-- Toque en "Cancelar" → descarta → vuelve a Pantalla 2 ("Grabar Mensaje").
-
-**Interaccion por botones fisicos:**
-- **BOOT (doble click):** Cambia la seleccion entre Enviar/Cancelar.
-- **BOOT (click simple):** Activa la opcion seleccionada.
-- **PWR (click simple):** Equivalente a Cancelar → vuelve a Pantalla 2.
-
-### Pantalla 3b — Mensaje descartado!!
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|                                             |
-|         Mensaje descartado!!                |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- Se muestra por **exactamente 1.5 segundos**.
-- Luego transita automaticamente a Pantalla 2 ("Grabar Mensaje").
-- Sin interaccion del usuario durante esta pantalla.
-
-### Pantalla 5 — Esperando Respuesta...
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|                                             |
-|         Esperando Respuesta...              |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- El mensaje se envio al agente (`/api/chat/message` con `response_audio: true`).
-- Se espera la respuesta del backend.
-- **NOTA:** Durante esta pantalla el contador de inactividad para deep sleep (60s) esta **PAUSADO**.
-
-### Pantalla 6 — Mostrando Respuesta
-
-```
-+---------------------------------------------+
-| WIFI: OK                           [bat]XX% |
-|---------------------------------------------|
-|                                             |
-|   [texto de respuesta del agente]           |
-|   (campo agent_text, centrado, multilinea)  |
-|                                             |
-|                                             |
-+---------------------------------------------+
-```
-
-- Muestra el texto de respuesta del agente (`agent_text`) centrado en pantalla.
-- Simultaneamente, reproduce el audio TTS descargado desde `audio_url`.
-- Al terminar la reproduccion del audio → transita automaticamente a Pantalla 2 ("Grabar Mensaje") para permitir al usuario continuar la conversacion.
-- **NOTA:** Mientras se reproduce el audio, el contador de inactividad para deep sleep (60s) esta **PAUSADO**. Una vez termina la reproduccion, el contador se reanuda.
-- **NOTA:** Al abandonar esta pantalla (ya sea por fin de reproduccion, PWR o BOOT), se deben liberar inmediatamente de PSRAM tanto el buffer del archivo MP3 descargado como los textos de respuesta del STT y del agente, ya que no seran necesarios en la siguiente iteracion.
-
-**Interaccion por botones fisicos:**
-- **PWR (click simple):** Detiene la reproduccion de audio (si esta en curso) y transita a Pantalla 2 ("Grabar Mensaje"). Aplica la liberacion de buffers descrita arriba.
-- **BOOT (click simple):** Reinicia la reproduccion del audio TTS desde el principio, sin necesidad de volver a descargarlo. El texto en pantalla permanece sin cambios.
-
-**Interaccion tactil:**
-- Toque en pantalla: equivalente a BOOT (reinicia la reproduccion del audio).
+Firmware for the Waveshare ESP32-S3-Touch-ePaper-1.54 that operates as a voice-driven conversational interface. The device records spoken messages, transmits them to a backend AI agent over a persistent WebSocket connection, and plays back the agent's audio response while displaying its text on the e-paper screen. The entire conversation loop is hands-free after a button press or screen tap; the device returns to deep sleep after a configurable inactivity period.
 
 ---
 
-## 3. Maquina de Estados Completa
+## 2. User-Facing States and Screens
+
+The device has six application states, each with a corresponding screen rendered via LVGL 9 on the 200×200 e-paper display. The status bar (WiFi indicator and battery gauge) is present on every screen except deep sleep.
+
+### 2.1 State 0 — Connecting
 
 ```
-                       +------------------+
-                       |  0. Deep Sleep   |
-                       +--------+---------+
-                                |
-                    PWR o BOOT (usuario despierta)
-                                |
-                                v
-                       +--------+---------+
-               +------>|   1. Activo      |
-               |       +--------+---------+
-               |                |
-               |   Seleccion + UUID no nulo: mostrar 2 opciones
-               |   Seleccion + UUID nulo: solo "Nueva Conversacion"
-               |                |
-               |   BOOT click o touch en opcion seleccionada
-               |                |
-               |       +--------v---------+
-               |       |  2. Grabar Msg   |<-----------------------------+
-               |       +--------+---------+                              |
-               |                |                                        |
-               |         BOOT click o touch                              |
-               |                |                                        |
-               |       +--------v---------+                              |
-               |       | 2b. Escuchando.. |                              |
-               |       +--------+---------+                              |
-               |           |            |                                |
-               |    BOOT/touch     PWR o timeout 30s                     |
-               |    (detener y     (descarta)                            |
-               |     enviar)           |                                |
-               |           |      +-----v-----------+                    |
-               |           |      | 3b. Msj descart  |--(1.5s)----------+
-               |           |      +-----------------+                    |
-               |           |                                             |
-               |   +-------v--------+                                    |
-               |   | 3. Enviando... |                                    |
-               |   +-------+--------+                                    |
-               |           |                                             |
-               |    Respuesta STT recibida                               |
-               |           |                                             |
-               |   +-------v--------+                                    |
-               |   | 4. Confirmacion|                                    |
-               |   +-------+--------+                                    |
-               |       |           |                                     |
-               |    Enviar     Cancelar ---------------------------------+
-               |       |
-               |   +---v------------+
-               |   | 5. Esperando...|
-               |   +-------+--------+
-               |           |
-               |    Respuesta Chat+TTS recibida
-               |           |
-                |   +-------v--------+
-                |   | 6. Mostrar Rsp |
-                |   +-------+--------+
-                |       |       |        |
-                |  BOOT/touch  PWR o   Fin repr.
-                |   (replay) (detiene)  (auto)
-                |       |       |        |
-                +-------+-------+--------+  (vuelve a Grabar Msg + libera buffers)
++---------------------------------------------+
+| WIFI: --                          [bat]XX%  |
+|---------------------------------------------|
+|                                             |
+|           Connecting...                     |
+|                                             |
++---------------------------------------------+
 ```
+
+- Displayed immediately after boot or wake while the WiFi and WebSocket connections are established.
+- The on-board LED (GPIO 3) blinks at 200ms intervals during this state.
+- When the WebSocket connects, the device emits a wake beep (on user-initiated wake) and transitions to State 1 (Record).
+- If WiFi or the WebSocket fail, the device retries automatically via the background `wifi_task` and `ws_task`; the screen remains until a connection is established.
+
+### 2.2 State 1 — Record
+
+```
++---------------------------------------------+
+| WIFI: OK                          [bat]XX%  |
+|---------------------------------------------|
+|                                             |
+|             Record Message                  |
+|                                             |
++---------------------------------------------+
+```
+
+- The idle state. The device waits for user input to start a new recording.
+
+**Physical buttons:**
+- **BOOT single-click:** starts recording → State 2 (Listening).
+- **PWR single-click:** opens Settings → State 5.
+- **PWR long-press (any state):** enters deep sleep.
+
+**Touch (if FT6336 present):**
+- Tap anywhere on screen: starts recording → State 2.
+
+### 2.3 State 2 — Listening (Recording in Progress)
+
+```
++---------------------------------------------+
+| WIFI: OK                          [bat]XX%  |
+|---------------------------------------------|
+|                                             |
+|             Listening...                    |
+|                                             |
++---------------------------------------------+
+```
+
+- A start beep plays and the microphone captures audio at 16 kHz, 16-bit stereo into a 1.92 MB PSRAM buffer.
+- Maximum recording duration: 30 seconds (buffer capacity). When the buffer fills, the recording stops automatically and is discarded; the device returns silently to State 1.
+- The inactivity sleep timer is paused while recording.
+
+**Physical buttons:**
+- **BOOT single-click:** stops recording, plays a stop beep, and sends the WAV over WebSocket → State 3 (Receiving). If the recording contains no audio data (WAV header only, 44 bytes), the device returns to State 1 without sending.
+- **PWR single-click:** discards the recording without sending, plays a discard beep → State 1.
+
+**Touch:**
+- Tap anywhere: same as BOOT single-click (stop and send).
+
+### 2.4 State 3 — Receiving
+
+```
++---------------------------------------------+
+| WIFI: OK                          [bat]XX%  |
+|---------------------------------------------|
+| Transcribing...                             |
+| (server-pushed status updates appear here)  |
+|                                             |
+| (agent text tokens stream in as they arrive)|
+|                                             |
+| +------------------------------------------+|
+```
+
+- The recorded WAV has been sent and the device waits for the backend response over the same WebSocket.
+- The screen displays status updates pushed by the server (`transcribing`, `thinking`, `speaking`) mapped to localized labels, followed by the agent's text response streamed token-by-token.
+- In parallel, the device may receive a streaming PCM audio response via the WebSocket binary channel (see §7.2).
+- The inactivity sleep timer is paused throughout this state.
+
+**Transition triggers (server-driven):**
+- `{"type":"done"}` → copies the accumulated agent text and transitions to State 4 (Response).
+- `{"type":"error"}` → displays a localized error message for 2 seconds, stops any in-progress playback, frees audio buffers, and returns to State 1.
+- WebSocket disconnect → returns to State 0 (Connecting).
+
+**No physical button interaction during this state.**
+
+### 2.5 State 4 — Response
+
+```
++---------------------------------------------+
+| WIFI: OK                          [bat]XX%  |
+|---------------------------------------------|
+| (agent's text response,                     |
+|  scrollable, centered, word-wrapped)        |
+|                                             |
+|                                             |
+| +------------------------------------------+|
+```
+
+- Displays the agent's full text response. Audio playback (if any) runs concurrently via the streaming or WAV/PCM playback task.
+- The inactivity sleep timer is paused while audio is still playing.
+- Previous response text and audio buffers from State 3 are preserved so the user can finish reading/hearing.
+
+**Physical buttons:**
+- **BOOT single-click:** stops current audio playback, frees the audio buffer and response text, and immediately starts a new recording → State 2 (Listening). This allows rapid back-and-forth conversation.
+- **PWR single-click:** stops playback, frees buffers, plays a reconnect beep, and requests a WebSocket reconnect → State 0 (Connecting).
+
+**Touch:**
+- Tap anywhere: same as BOOT single-click.
+
+**Automatic transitions:**
+- If the WebSocket disconnects and audio has finished playing, the device returns to State 0.
+
+### 2.6 State 5 — Settings
+
+```
++---------------------------------------------+
+| WIFI: OK                          [bat]XX%  |
+|---------------------------------------------|
+| SETTINGS                                    |
+|                                             |
+| WiFi: <SSID>                                |
+| Language: English / Español                 |
+|                                             |
++---------------------------------------------+
+```
+
+- Displays the currently connected WiFi SSID and the active language.
+- The inactivity sleep timer is **not** paused in this state — the device will sleep after 60 seconds of inactivity even while settings are shown.
+
+**Physical buttons:**
+- **BOOT single-click:** toggles language (English ↔ Español), re-renders the screen.
+- **PWR single-click:** returns to State 1 (Record).
 
 ---
 
-## 4. Comportamiento del Deep Sleep
+## 3. State Machine
 
-### Entrada en Deep Sleep
-- Contador de inactividad: **60 segundos**.
-- El contador corre en todas las pantallas EXCEPTO:
-  - Pantalla 2b ("Escuchando...")
-  - Pantalla 3 ("Enviando Mensaje...")
-  - Pantalla 5 ("Esperando Respuesta...")
-  - Pantalla 6 ("Mostrando Respuesta") mientras se reproduce audio
-- Al agotarse los 60s, el dispositivo entra en deep sleep.
-- **Inmediatamente antes de entrar en deep sleep**, el display debe ejecutar un **full refresh** (limpieza completa de la pantalla con `EPD_Display()` usando el LUT completo, no partial refresh). Esto garantiza que la pantalla quede completamente blanca antes de dormir y evita acumulacion de ghosting. Esta regla aplica **siempre** que se entra a deep sleep, incluyendo la primera vez.
-
-### Durante el Deep Sleep
-- Duracion: **60 minutos** (programado via RTC o timer interno).
-- Variables que sobreviven: aquellas anotadas con `RTC_DATA_ATTR`.
-- Pines que PERMANECEN activos (REGLA NO NEGOCIABLE):
-  - VBAT_PWR_PIN (GPIO 17): alimentacion de bateria.
-  - Carga por USB-C: controlado por hardware, no se desactiva.
-  - PWR_BUTTON_PIN (GPIO 18) y BOOT_BUTTON_PIN (GPIO 0): wakeup sources.
-- Los pines de wakeup se configuran via `esp_sleep_enable_ext1_wakeup_io()` con `ESP_EXT1_WAKEUP_ANY_LOW`.
-- Se usa `rtc_gpio_hold_en()` en GPIO 17 para mantener el estado de VBAT durante el sleep.
-
-### Salida del Deep Sleep
-
-**Caso A — Usuario despierta con PWR o BOOT:**
-1. Se evalua la causa de wakeup (`esp_sleep_get_wakeup_cause()`).
-2. Si la causa es `ESP_SLEEP_WAKEUP_EXT1`, se identifica el pin que desperto.
-3. Se reinicializan todos los perifericos (WiFi, display, audio, etc.).
-4. **El contador de sleeps (`sleep_counter`) se reinicia a 0**, ya que el usuario ha intervenido activamente.
-5. Se muestra la Pantalla 1 (Activo).
-
-**Caso B — Auto-despertar por timer (60 minutos):**
-1. Se evalua la causa de wakeup.
-2. Si es `ESP_SLEEP_WAKEUP_TIMER`, se incrementa el contador `RTC_DATA_ATTR int sleepCounter`.
-3. Se enciende el display.
-4. Se limpia completamente la pantalla en blanco.
-5. Se muestra "Durmiendo... N" con el valor actualizado de N.
-6. Se vuelve a entrar en deep sleep por 60 minutos.
-7. NOTA: En este caso NO se enciende WiFi ni audio.
-
----
-
-## 5. Barra de Estado (WiFi + Bateria)
-
-### Formato
 ```
-WIFI: OK                           [bat]XX%
-```
-
-### Posicion
-- Parte superior de la pantalla, en todas las pantallas excepto Pantalla 0 (Deep Sleep).
-- "WIFI: OK" alineado a la izquierda.
-- Icono de bateria + porcentaje alineado a la derecha.
-
-### Estados WiFi
-- **WIFI: OK** — Conectado, direccion IP asignada.
-- **WIFI: --** — Desconectado o conectando.
-
-### Estados Bateria
-Se muestra un icono de bateria (grafico simple) y el porcentaje calculado.
-- **100%:** Vbat >= 4.12V
-- **0%:** Vbat <= 3.0V
-- **Interpolacion lineal:** `(Vbat - 3.0) / (4.12 - 3.0) * 100`
-- Antes de medir, se debe activar VBAT_PWR_PIN (GPIO 17). Despues de medir, se puede desactivar para ahorrar energia (excepto si se va a usar en breve).
-
-### Actualizacion
-- La bateria se mide y se actualiza cada vez que se renderiza una pantalla o al menos cada 30 segundos.
-
----
-
-## 6. Flujo de Conversacion (Nueva vs Continuar)
-
-### Nueva Conversacion
-1. Usuario selecciona "Nueva Conversacion" en Pantalla 1.
-2. El firmware genera un nuevo UUID (thread_id) usando `esp_random()` o similar, o lo solicita al backend.
-3. Se almacena el UUID en `RTC_DATA_ATTR`.
-4. Se procede a Pantalla 2 (Grabar Mensaje).
-
-### Continuar Conversacion
-1. Usuario selecciona "Continuar Conversacion" en Pantalla 1.
-2. Se usa el UUID (thread_id) ya almacenado.
-3. Se procede a Pantalla 2 (Grabar Mensaje).
-
-### Primer inicio (UUID nulo)
-1. En Pantalla 1 solo se muestra el boton "Nueva Conversacion".
-2. Al seleccionarlo, transita directamente a Pantalla 2 con generacion de nuevo UUID.
-
----
-
-## 7. Internacionalizacion (i18n)
-
-Todos los mensajes visibles al usuario deben almacenarse en un diccionario/estructura de variables globales (ej. `Messages`), indexados por clave. Ejemplo:
-
-```cpp
-struct LangMessages {
-    const char* continuar_conversacion;
-    const char* nueva_conversacion;
-    const char* grabar_mensaje;
-    const char* escuchando;
-    const char* enviando_mensaje;
-    const char* mensaje_descartado;
-    const char* esperando_respuesta;
-    const char* durmiendo;
-    const char* enviar;
-    const char* cancelar;
-    const char* wifi_ok;
-    // ...
-};
-
-// Por ahora solo espanol
-const LangMessages MSG_ES = {
-    .continuar_conversacion = "Continuar Conversacion",
-    .nueva_conversacion = "Nueva Conversacion",
-    .grabar_mensaje = "Grabar Mensaje",
-    .escuchando = "Escuchando...",
-    .enviando_mensaje = "Enviando Mensaje...",
-    .mensaje_descartado = "Mensaje descartado!!",
-    .esperando_respuesta = "Esperando Respuesta...",
-    .durmiendo = "Durmiendo...",
-    .enviar = "Enviar",
-    .cancelar = "Cancelar",
-    .wifi_ok = "WIFI: OK",
-};
-
-LangMessages* currentLang = &MSG_ES;
+                     ┌─────────────────────┐
+                     │   0. CONNECTING     │◄──────────────────────────┐
+                     └─────────┬───────────┘                           │
+                               │                                       │
+                      EVT_WS_CONNECTED                                 │
+                      (+ wake beep if user wake)                       │
+                               │                                       │
+                               ▼                                       │
+                     ┌─────────────────────┐                           │
+              ┌─────►│    1. RECORD        │◄────┐                     │
+              │      └─────────┬───────────┘     │                     │
+              │                │                 │                     │
+              │     EVT_START_RECORDING   EVT_EXIT_SETTINGS            │
+              │         (BOOT / touch)          (PWR)                  │
+              │                │                 │                     │
+              │                ▼                 │                     │
+              │      ┌─────────────────────┐     │                     │
+              │      │   2. LISTENING      │     │                     │
+              │      └─────────┬───────────┘     │                     │
+              │           │         │            │                     │
+              │    EVT_STOP_   EVT_DISCARD/      │                     │
+              │    RECORDING   EVT_RECORDING_    │                     │
+              │  (valid WAV)   DONE (timeout)    │                     │
+              │           │         │            │                     │
+              │           │         └────────────┤                     │
+              │           │                      │                     │
+              │           ▼                      │                     │
+              │      ┌─────────────────────┐     │                     │
+              │      │   3. RECEIVING      │     │                     │
+              │      └─────────┬───────────┘     │                     │
+              │           │         │            │                     │
+              │    EVT_RESPONSE_  EVT_WS_ERROR/  │                     │
+              │    READY (done)   EVT_WS_DISCONNECTED                  │
+              │           │         │            │                     │
+              │           ▼         ▼            │                     │
+              │      ┌─────────────────────┐     │                     │
+              │      │   4. RESPONSE       │     │                     │
+              │      └──────┬──────┬───────┘     │                     │
+              │        BOOT │ PWR  │ WS disc.    │                     │
+              │    (EVT_NEXT_│(EVT_ │ + audio    │                     │
+              │     MESSAGE) │  WS_ │ done       │                     │
+              │              │RECONNECT)         │                     │
+              │              │      │            │                     │
+              │              │      ▼            │                     │
+              │              └───────────────────┘                     │
+              │                                                        │
+              │      ┌─────────────────────┐                           │
+              ├──────┤   5. SETTINGS       │                           │
+              │      └─────────┬───────────┘                           │
+              │    EVT_TOGGLE_  │                                      │
+              │    LANGUAGE     │                                      │
+              │    (re-render)  │                                      │
+              │                │                                       │
+              │   WS disconnect / error from any state ────────────────┘
+              │
+              └─── PWR long-press from any state → deep sleep
 ```
 
+**Button actions summary:**
+
+| State | BOOT single-click | PWR single-click | PWR long-press |
+|-------|-------------------|------------------|----------------|
+| CONNECTING | ignored | ignored | deep sleep |
+| RECORD | start recording | open settings | deep sleep |
+| LISTENING | stop & send | discard | deep sleep |
+| RECEIVING | ignored | ignored | deep sleep |
+| RESPONSE | next message | reconnect WS | deep sleep |
+| SETTINGS | toggle language | exit settings | deep sleep |
+
+Touch interaction: tap in RECORD → start recording; tap in LISTENING → stop & send; tap in RESPONSE → next message.
+
 ---
 
-# PARTE 2: ESPECIFICACION TECNICA
+## 4. Deep Sleep Behaviour
 
-## 8. Plataforma Hardware
+**Entry:**
+- An inactivity timer runs for 60 seconds. It is paused in LISTENING, RECEIVING, and RESPONSE (while audio is playing). It is **not** paused in SETTINGS.
+- When the timer expires, the device draws the deep sleep screen, waits 500ms, and enters deep sleep.
+- PWR long-press from any state bypasses the timer and enters deep sleep immediately.
+- Before sleeping, a full e-paper refresh (`EPD_Init()` + `EPD_Display()`) is executed to erase the display and prevent ghosting. A sleep beep plays.
 
-| Componente | Especificacion |
-|------------|---------------|
-| Microcontrolador | ESP32-S3 (Xtensa LX7 dual-core, 240 MHz) |
-| Memoria Flash | 16 MB (QIO mode) |
-| PSRAM | Octal SPI RAM (SPIRAM mode OCT, 80 MHz) |
-| Display | E-Paper 1.54", 200x200 pixeles, 1-bit (blanco/negro) |
-| Controlador Display | SSD1681 (compatible GDEW0154M10) |
-| Touch | FT6336 (I2C addr 0x38) — opcional, se detecta en runtime |
-| Audio Codec | ES8311 (I2S + I2C), amplificador PA en GPIO 46 |
+**During sleep:**
+- Duration: 3600 seconds (1 hour) via RTC timer wake-up.
+- Wake sources: BOOT (GPIO 0) or PWR (GPIO 18) via `EXT1_ANY_LOW`.
+- GPIO 17 (VBAT power) is held via `rtc_gpio_hold_en()`.
+- Variables in RTC slow memory survive: `boot_count`, `sleep_counter`, `g_lang_index`.
+
+**Wake causes:**
+
+| Cause | Behaviour |
+|-------|-----------|
+| `ESP_SLEEP_WAKEUP_EXT1` (user pressed BOOT or PWR) | Full initialization: display, WiFi, WebSocket, audio. `sleep_counter` reset to 0. Wake beep queued. |
+| `ESP_SLEEP_WAKEUP_TIMER` (auto-wake after 1 hour) | Light path: display only. Increments `sleep_counter`, renders "Sleeping... N" screen, and re-enters deep sleep after 800ms. No WiFi, no audio, no full EPD refresh. |
+| First boot (`boot_count == 0`) | Full initialization, `sleep_counter = 0`, no wake beep. |
+
+---
+
+## 5. Status Bar
+
+Rendered as an LVGL layer-top widget, 200×24 px. Visible on all screens except deep sleep.
+
+- **WiFi indicator (left):** displays `WIFI: OK` when connected or `WIFI: --` when disconnected/connecting.
+- **Battery indicator (right):** a 4-bar icon plus percentage label (e.g., `[||||] 85%`). Bars fill in 25% increments. The percentage is computed from a calibrated LiPo voltage curve (see §8.2).
+- Updated every 30 seconds by the `bat_task`; WiFi status updated every 5 seconds by the `wifi_task`.
+
+---
+
+## 6. Internationalization (i18n)
+
+Two languages are supported: Spanish (`MSG_ES`) and English (`MSG_EN`). The language index is stored in RTC memory (`g_lang_index`) and persists across deep sleep cycles.
+
+Adding a language requires:
+1. Defining a `const LangMessages MSG_XX` table with all fields.
+2. Appending its pointer to `lang_table[]` in `messages.cpp`.
+3. The table count is derived automatically via `sizeof`.
+
+The language is toggled in the Settings screen (BOOT single-click) and initialized at boot from the persisted index.
+
+---
+
+# PART 2: TECHNICAL SPECIFICATION
+
+## 7. Hardware Platform
+
+| Component | Specification |
+|-----------|---------------|
+| Microcontroller | ESP32-S3R8 (Xtensa LX7 dual-core, 240 MHz) |
+| Flash | 8 MB (QIO mode) |
+| PSRAM | Octal SPI, 8 MB (OPI PSRAM mode) |
+| Display | E-Paper 1.54", 200×200 px, 1-bit (black/white), SSD1681 controller |
+| Touch | FT6336 capacitive (I2C addr 0x38) — detected at runtime; operations degrade gracefully when absent |
+| Audio Codec | ES8311 (I2S in/out + I2C control), external PA on GPIO 46 |
 | RTC | PCF85063 (I2C addr 0x51) |
-| Sensor Temp/Hum | SHTC3 (I2C addr 0x70) |
-| Bateria | LiPo 1S, monitoreo por ADC1_CH3 (GPIO 4) con divisor 1:2 |
-| Botones | BOOT (GPIO 0), PWR (GPIO 18) |
-| LED | GPIO 3 (indicador de estado) |
-| Carga | USB-C con control de carga integrado |
+| Temp/Humidity | SHTC3 (I2C addr 0x70) |
+| Battery | LiPo 1S, ADC1_CH3 (GPIO 4), 1:2 voltage divider |
+| Buttons | BOOT (GPIO 0), PWR (GPIO 18) — both active LOW |
+| LED | GPIO 3 — active LOW (LOW = on, HIGH = off); `wifi_led_write(true)` means LED on |
+| Charging | USB-C with integrated charge controller |
 
 ---
 
-## 9. Mapa de Pines Completo
+## 8. Pin Map
 
-### Display E-Paper (SPI2)
-| Señal | GPIO | Direccion | Notas |
-|-------|------|-----------|-------|
+### 8.1 Display — SPI2
+
+| Signal | GPIO | Direction | Notes |
+|--------|------|-----------|-------|
 | DC | 10 | Output | Data/Command |
-| CS | 11 | Output | Chip Select (activo LOW) |
+| CS | 11 | Output | Chip Select, active LOW |
 | SCK | 12 | Output | SPI Clock |
-| MOSI | 13 | Output | SPI Data (no MISO, solo escritura) |
-| RST | 9 | Output | Hardware Reset |
-| BUSY | 8 | Input | HIGH = ocupado, LOW = listo |
-| PWR | 6 | Output | Alimentacion display (activo LOW: 0=ON) |
+| MOSI | 13 | Output | MOSI only (no MISO, write-only) |
+| RST | 9 | Output | Hardware reset |
+| BUSY | 8 | Input | HIGH = busy |
+| PWR | 6 | Output | Display power rail, active LOW |
 
-### Audio (I2S + Control)
-| Señal | GPIO | Notas |
-|-------|------|-------|
-| I2S BCLK | 15 | Bit Clock |
-| I2S WS | 38 | Word Select / LRCLK |
-| I2S DOUT | 45 | Data Output (DAC → codec) |
-| I2S DIN | 16 | Data Input (codec ADC → ESP32) |
-| I2S MCLK | 14 | Master Clock |
-| Audio PWR | 42 | Alimentacion codec (activo LOW: 0=ON) |
-| PA | 46 | Amplificador audio (activo HIGH) |
+### 8.2 Audio — I2S + Control
 
-### I2C Bus (I2C_NUM_0, 400 kHz)
-| Señal | GPIO |
-|-------|------|
+| Signal | GPIO | Notes |
+|--------|------|-------|
+| BCLK | 15 | I2S bit clock |
+| WS / LRCLK | 38 | Word select |
+| DOUT | 45 | Data out (ESP32 → codec DAC) |
+| DIN | 16 | Data in (codec ADC → ESP32) |
+| MCLK | 14 | Master clock |
+| Audio PWR | 42 | Codec power rail, active LOW |
+| PA | 46 | External amplifier enable, active HIGH |
+
+### 8.3 I2C Bus (I2C_NUM_0, 400 kHz)
+
+| Signal | GPIO |
+|--------|------|
 | SDA | 47 |
 | SCL | 48 |
 
-### Dispositivos I2C
-| Dispositivo | Direccion | Funcion |
-|-------------|-----------|---------|
-| PCF85063 | 0x51 | RTC |
-| SHTC3 | 0x70 | Temp/Humedad |
-| FT6336 | 0x38 | Touch (opcional) |
+| Device | Address |
+|--------|---------|
+| PCF85063 (RTC) | 0x51 |
+| SHTC3 (sensor) | 0x70 |
+| FT6336 (touch) | 0x38 |
 
-### Touch (FT6336)
-| Señal | GPIO | Notas |
-|-------|------|-------|
-| RST | 7 | Reset (HIGH-LOW-HIGH) |
-| INT | 21 | Interrupcion (NEGEDGE, pull-up) |
+### 8.4 Other Pins
 
-### Botones
-| Boton | GPIO | Activo | Wakeup |
-|-------|------|--------|--------|
-| BOOT | 0 | LOW | EXT1 |
-| PWR | 18 | LOW | EXT1 |
-
-### Potencia y Bateria
-| Señal | GPIO | Activo | Notas |
-|-------|------|--------|-------|
-| VBAT PWR | 17 | HIGH = ON | Habilita circuito de medicion |
-| VBAT ADC | 4 | ADC1_CH3 | Medicion con divisor 1:2 |
-
-### LED
-| Señal | GPIO | Notas |
-|-------|------|-------|
-| LED | 3 | HIGH = encendido |
-
-### RTC
-| Señal | GPIO | Notas |
-|-------|------|-------|
-| RTC INT | 5 | Interrupcion del PCF85063 |
+| Signal | GPIO | Notes |
+|--------|------|-------|
+| Touch RST | 7 | Reset pulse HIGH→LOW→HIGH |
+| Touch INT | 21 | Interrupt, falling edge, pull-up |
+| VBAT PWR | 17 | Battery measurement circuit enable |
+| VBAT ADC | 4 | ADC1_CH3, 12 dB attenuation |
+| LED | 3 | Active LOW |
+| RTC INT | 5 | PCF85063 interrupt |
+| BOOT | 0 | Wake source EXT1 |
+| PWR | 18 | Wake source EXT1 |
 
 ---
 
-## 10. Arquitectura de Software
+## 9. Software Architecture
 
-### Librerias Externas Requeridas
+### 9.1 External Libraries
 
-| Libreria | Version | Uso | Fuente |
-|----------|---------|-----|--------|
-| **lvgl** | v8.x | UI y renderizado de pantallas | `01_Arduino_Libraries/lvgl8/` |
-| **SensorLib** | — | Driver RTC (SensorPCF85063) y sensores | `01_Arduino_Libraries/SensorLib/` |
-| **esp_codec_dev** | v1.3.5 | Control de codec ES8311 | `08_Audio_Test/src/esp_codec_dev/` |
-| **multi_button** | — | Manejo de botones con multi-press | Incluido en ejemplos |
-| **minimp3** | — | **Decodificacion MP3 a PCM** | Single-header C (ver seccion 11) |
-| **WiFi** | Arduino built-in | Conexion WiFi STA | nativo |
-| **HTTPClient** | Arduino built-in | Peticiones REST | nativo |
+| Library | Version | Usage |
+|---------|---------|-------|
+| lvgl | 9.x | UI rendering, configured via project `lv_conf.h` |
+| ArduinoWebsockets | — | WebSocket client transport |
+| multi_button | vendored in `src/button_bsp/` | Multi-press button detection |
+| esp_codec_dev | v1.3.5, vendored in `src/esp_codec_dev/` | ES8311 codec control |
+| codec_board | vendored in `src/codec_board/` | ES8311 board-level init |
 
-### Estructura de Archivos del Proyecto
+### 9.2 File Map
 
 ```
 ePaperConversational/
-├── ePaperConversational.ino       # Punto de entrada (setup/loop vacios)
-├── user_config.h                  # Pines, constantes, configuracion
-├── user_app.h                     # Declaraciones de user_app
-├── user_app.cpp                   # Logica principal de la aplicacion
-├── messages.h                     # Diccionario de mensajes i18n
-├── messages.cpp                   # Implementacion de idiomas
-├── audio_bsp.h                    # API de audio (grabar/reproducir)
-├── audio_bsp.cpp                  # Implementacion de audio
-├── wifi_bsp.h                     # API de WiFi
-├── wifi_bsp.cpp                   # Implementacion de WiFi
-├── api_client.h                   # API REST client
-├── api_client.cpp                 # Implementacion llamadas HTTP
-├── minimp3.h                      # Decodificador MP3 (single-header)
+├── ePaperConversational.ino    # setup() / loop()
+├── user_app.h / .cpp           # State machine, LVGL port, tasks, touch, deep sleep
+├── user_config.h               # All non-secret constants (pins, timings, buffer sizes)
+├── user_config_secrets.h       # Gitignored: WiFi credentials, API_BASE_URL
+├── ws_client.h / .cpp          # WebSocket client, JSON parsing, audio buffer mgmt
+├── audio_stream.h / .cpp       # 512 KB PSRAM ring buffer for streaming PCM
+├── audio_bsp.h / .cpp          # ES8311 control, recording, playback, beeps
+├── messages.h / .cpp           # i18n string tables (MSG_ES, MSG_EN)
+├── wifi_bsp.h / .cpp           # Multi-WiFi scan/connect, LED, status-bar updates
+├── lv_conf.h                   # LVGL 9 configuration (copied into Arduino library)
+├── font_montserrat_latin_14.c  # Project font (14 px, 4bpp, ASCII + Latin-1)
+├── api_client.h / .cpp         # Dead code — unused REST client, compiled but not linked
+├── minimp3.h                   # Dead code — unused MP3 decoder
 ├── src/
-│   ├── display/
-│   │   ├── epaper_driver_bsp.h    # Driver e-paper
-│   │   └── epaper_driver_bsp.cpp
-│   ├── power/
-│   │   ├── board_power_bsp.h      # Control de alimentacion
-│   │   └── board_power_bsp.cpp
-│   ├── button_bsp/
-│   │   ├── button_bsp.h           # Botones fisicos
-│   │   ├── button_bsp.cpp
-│   │   ├── multi_button.h         # Libreria multi-press
-│   │   └── multi_button.c
-│   ├── i2c_bsp/
-│   │   ├── i2c_bsp.h              # Bus I2C
-│   │   └── i2c_bsp.cpp
-│   ├── touch_bsp/
-│   │   ├── ft6336_bsp.h           # Driver touch FT6336
-│   │   └── ft6336_bsp.cpp
-│   ├── battery/
-│   │   ├── battery_bsp.h          # Medicion de bateria
-│   │   └── battery_bsp.cpp
-│   ├── codec_board/
-│   │   ├── board_cfg.h            # Configuracion de codec de audio
-│   │   ├── board_cfg.c
-│   │   ├── codec_board.h          # Inicializacion de codec
-│   │   ├── codec_board.cpp
-│   │   ├── codec_init.h
-│   │   └── codec_init.c
-│   ├── esp_codec_dev/             # Libreria de codec (misma de Audio_Test)
-│   │   └── ...
+│   ├── display/                # E-paper SPI driver (epaper_driver_display)
+│   ├── power/                  # GPIO power rails for EPD / audio / VBAT
+│   ├── button_bsp/             # Vendored multi_button + press detection
+│   ├── i2c_bsp/                # I2C bus init (SDA=47, SCL=48)
+│   ├── touch_bsp/              # FT6336 driver
+│   ├── battery/                # ADC battery measurement
+│   ├── codec_board/            # Vendored codec board init
+│   ├── esp_codec_dev/          # Vendored esp_codec_dev v1.3.5
 │   └── ui/
-│       ├── screens.h              # Declaraciones de pantallas
-│       ├── screens.cpp            # Implementacion de cada pantalla
-│       ├── status_bar.h           # Barra de estado WiFi+Bateria
-│       └── status_bar.cpp
+│       ├── screens.h / .cpp    # Seven create_screen_*() functions + status coalescing
+│       └── status_bar.h / .cpp # WiFi + battery status bar
+└── specs/
+    └── TechnicalSpec.md        # This document
 ```
 
-### Tareas FreeRTOS
+### 9.3 FreeRTOS Tasks
 
-| Tarea | Core | Prioridad | Stack | Funcion |
-|-------|------|-----------|-------|---------|
-| `lvgl_task` | 1 | 4 | 8192 | Maneja el tick de LVGL y renderizado |
-| `button_task` | 1 | 3 | 4096 | Sondeo de botones (multi_button) |
-| `touch_task` | 1 | 3 | 4096 | Procesamiento de eventos touch (solo si FT6336 presente) |
-| `audio_task` | 1 | 5 | 8192 | Grabacion, codificacion WAV, reproduccion audio |
-| `wifi_task` | 1 | 2 | 4096 | Conexion y reconexion WiFi |
-| `main_state_task` | 1 | 3 | 8192 | Maquina de estados principal |
-| `deep_sleep_timer_task` | 1 | 1 | 4096 | Contador de inactividad (60s) |
+All tasks are pinned to Core 1.
 
-### Comunicacion entre Tareas
+| Task | Priority | Stack | Function |
+|------|----------|-------|----------|
+| `LVGL` | 4 | 8 KB | LVGL timer handler + render loop; owns the LVGL mutex |
+| `ws_task` | 3 | 20 KB | WebSocket connect/poll/send, JSON parsing, binary→ring-buffer write; 20 KB stack needed for `String` URL parsing |
+| `stream_task` | 5 | 8 KB | Streaming audio playback (created dynamically on `audio_start`, exits on `audio_end`/timeout) |
+| `state_task` | 3 | 8 KB | Consumes `state_queue`, drives all screen transitions |
+| `btn_task` | 3 | 4 KB | Polls boot/pwr event groups, translates button events to `AppEvent` on `state_queue` |
+| `touch_task` | 3 | 4 KB | FT6336 touch processing via lock-free ring buffer; only created if touch is detected |
+| `wifi_task` | 2 | 4 KB | WiFi reconnect loop, status bar WiFi update |
+| `bat_task` | 1 | 4 KB | Periodic battery measurement, status bar battery update |
+| `sleep_timer` | 1 | 4 KB | 60-second inactivity countdown |
 
-| Mecanismo | Uso |
-|-----------|-----|
-| `EventGroupHandle_t` | Eventos de botones (BOOT: click, double, long; PWR: click, long) |
-| `EventGroupHandle_t` | Eventos de touch (tap detectado, coordenadas) |
-| `EventGroupHandle_t` | Eventos de sistema (wifi_connected, api_response_ready, audio_done) |
-| `QueueHandle_t` | Cola de estados para la maquina de estados principal |
-| `SemaphoreHandle_t` | Mutex para acceso thread-safe a LVGL |
-| `SemaphoreHandle_t` | Semaforo binario para notificacion de descarga HTTP completada |
+Additional transient tasks:
+- `rec_task` (prio 5, 8 KB): recording loop, exits when stopped or buffer full.
+- `wav_task` (prio 5, 8 KB): WAV/PCM playback loop, exits when done or stopped.
+
+### 9.4 Inter-Task Communication
+
+| Mechanism | Usage |
+|-----------|-------|
+| `QueueHandle_t state_queue` | AppEvent messages (12 event types) for state transitions |
+| `QueueHandle_t ws_cmd_queue` | WsCmd (send_audio / reconnect) — isolates other tasks from the socket |
+| `EventGroupHandle_t boot_groups` | BOOT button events (single, double, long, up) |
+| `EventGroupHandle_t pwr_groups` | PWR button events (single, double, long, up) |
+| `EventGroupHandle_t wifi_event_group` | WiFi connected/disconnected flags |
+| `EventGroupHandle_t touch_event_group` | Touch tap detected flag |
+| `SemaphoreHandle_t lvgl_mux` | Mutex — must be held before any LVGL widget access |
+| `SemaphoreHandle_t space_sem` (in `audio_stream`) | Binary semaphore — reader signals writer when ring buffer space frees |
+| Task notifications | `stream_task` reader wake-up; `sleep_timer` activity feed; `wav_task` stop signal |
 
 ---
 
-## 11. Pipeline de Audio
+## 10. LVGL Configuration
 
-### Grabacion (Microfono → API)
-
-```
-Microfono → ES8311 ADC → I2S DIN (16000 Hz, 16-bit, 2 canales)
-    → buffer en PSRAM (max 30 segundos: 16000*2*2*30 = 1,920,000 bytes)
-    → Codificar WAV (agregar header WAV de 44 bytes)
-    → POST /api/audio/transcribe (multipart/form-data)
-```
-
-**Formato WAV resultante:**
-- Sample rate: 16000 Hz
-- Bits per sample: 16
-- Canales: 2 (estereo) — se graba en estereo pero se podria convertir a mono
-- Codec: PCM (sin compresion)
-- Header WAV estandar (RIFF, fmt, data chunks)
-
-### Reproduccion (API → Parlante)
-
-```
-GET /api/audio/files/<filename>.mp3
-    → Buffer en PSRAM (archivo MP3 descargado, se conserva durante toda la estancia en Pantalla 6)
-    → Decodificar con minimp3: MP3 → PCM 16-bit stereo
-    → PCM → esp_codec_dev_write() → I2S DOUT → ES8311 DAC → PA (GPIO 46) → Parlante
-    → [BOOT] → Reiniciar puntero MP3 y decodificador, reproducir de nuevo desde el buffer
-    → [PWR o fin] → Detener reproduccion, liberar buffer MP3 y textos, volver a Pantalla 2
-```
-
-**Formato de salida PCM:**
-- Sample rate: el que indique el stream MP3 (tipicamente 44100 o 48000 Hz)
-- Bits per sample: 16
-- Canales: 2 (estereo)
-- La libreria `esp_codec_dev` debe configurarse dinamicamente al sample rate del MP3 decodificado.
-
-### Pipeline de decodificacion MP3 (minimp3)
-
-minimp3 es una libreria C de un solo archivo (`minimp3.h`) que provee:
-
-```c
-// API principal:
-void mp3dec_init(mp3dec_t *dec);
-int mp3dec_decode_frame(mp3dec_t *dec, const uint8_t *mp3, int mp3_bytes,
-                         mp3d_sample_t *pcm, mp3dec_frame_info_t *info);
-```
-
-**Flujo de decodificacion:**
-
-```
-1. Descargar archivo MP3 completo a buffer en PSRAM via HTTP GET.
-2. Inicializar decodificador: mp3dec_init(&dec).
-3. Bucle:
-   a. mp3dec_decode_frame(&dec, mp3_buf_ptr, bytes_remaining, pcm_buffer, &info);
-   b. Si PWR fue presionado → interrumpir bucle, liberar buffers (paso 4), transitar a Pantalla 2.
-   c. Si BOOT fue presionado → reiniciar puntero al inicio del buffer MP3 y decodificador (mp3dec_init de nuevo), continuar bucle.
-   d. Escribir pcm_buffer (info.channels * info.audio_bytes samples) via esp_codec_dev_write().
-   e. Avanzar mp3_buf_ptr += info.frame_bytes.
-   f. Repetir hasta que no queden mas bytes o se interrumpa.
-4. Liberar buffer MP3 de PSRAM y resetear punteros de datos de respuesta.
-```
-
-**Gestion de buffers de respuesta:**
-- Al abandonar la Pantalla 6 por cualquier motivo (fin de reproduccion, PWR, BOOT, o timeout), se liberan todos los buffers asociados a la respuesta del ciclo conversacional:
-  - Buffer del archivo MP3 descargado.
-  - Texto de transcripcion STT (respuesta de `/api/audio/transcribe`).
-  - Texto de respuesta del agente (`agent_text` de `/api/chat/message`).
-  - URL de audio (`audio_url`).
-- Esto asegura que cada nuevo ciclo de grabacion-envio-respuesta parte con la memoria limpia.
-```
-
-**Buffers necesarios en PSRAM:**
-- Buffer MP3: ~200 KB tipico para unos 30 segundos de audio MP3 (a 64kbps).
-- Buffer PCM de salida: `MP3_MAX_SAMPLES_PER_FRAME * 2 * 2 = 1152 * 4 = ~4.6 KB` por frame, reutilizable.
+- **Version:** 9.x (compile-time check enforced).
+- **Display resolution:** 200×200, colour format RGB565.
+- **Render mode:** `LV_DISPLAY_RENDER_MODE_FULL` — always redraws the full area; the flush callback thresholds each pixel.
+- **Buffers:** Two 80 KB buffers (200×200×2 bytes), allocated in SPIRAM with fallback to internal RAM.
+- **Flush callback:** `EPD_Clear()` → for each RGB565 pixel, threshold at `0x7FFF` to produce 1-bit black/white → `EPD_DrawColorPixel()` → `EPD_DisplayPart()` (partial refresh) → `lv_display_flush_ready()`.
+- **Tick source:** `esp_timer` at 5 ms → `lv_tick_inc(5)`.
+- **Touch input:** A lock-free ring buffer of 32 `TouchSample` structs fed by the `touch_task` and consumed by `lvgl_touch_read_cb`. Sets `data->continue_reading` when more samples are pending.
+- **Full refresh (`EPD_Init()` + `EPD_Display()`)** is reserved exclusively for deep sleep entry. All runtime updates use partial refresh.
+- **Disabled in `lv_conf.h`:** unused widgets, themes, layouts, decoders, display drivers, and the built-in Montserrat 14 font. The project font is `font_montserrat_latin_14.c`.
+- LVGL themes are disabled, so styled objects must set opacity explicitly (e.g., `LV_OPA_COVER`).
 
 ---
 
-## 12. API REST — Protocolo Completo
+## 11. WebSocket Protocol
 
-### Endpoint Base
-```
-BASE_URL = "http://<IP>:<PUERTO>"   // Variable de configuracion en firmware
-```
+A single persistent WebSocket connection to `ws://<host>:<port>/ws`, where `<host>` and `<port>` are parsed from the `http://host:port` URL stored in `API_BASE_URL`.
 
-### 12.1 Health Check (al iniciar)
-```
-GET /api/health
-Response 200: {"status": "ok", ...}
-```
-Verifica conectividad con el backend al iniciar el dispositivo.
+`WiFi.setSleep(false)` is called inside `ws_task` to prevent modem sleep from disrupting real-time audio streaming.
 
-### 12.2 Transcribir Audio
-```
-POST /api/audio/transcribe
-Content-Type: multipart/form-data
+### 11.1 Client → Server
 
-Body:
-  file: <archivo WAV>
+**Binary frame:** The recorded WAV file (44-byte header + 16-bit stereo PCM at 16 kHz), sent as a single binary message.
 
-Response 200:
-{
-  "text": "texto transcrito en idioma original",
-  "original_text": "texto original",
-  "translated_text": "texto traducido",
-  "detected_language": "es",
-  "duration_seconds": 2.5
-}
-
-Error: Cualquier codigo != 200 → mostrar error y volver a Pantalla 2.
+**Text frame (immediately after binary):**
+```json
+{"type":"audio_end"}
 ```
 
-### 12.3 Enviar Mensaje al Chat
+These two messages are sent sequentially through `ws_cmd_queue`, which is consumed by `ws_task` to ensure only the WebSocket task touches the socket.
+
+### 11.2 Server → Client
+
+The server responds with a mix of text and binary frames on the same connection. The hand-rolled JSON parser in `ws_client.cpp` uses `String::indexOf` with manual `\uXXXX` UTF-16 surrogate pair decoding — no ArduinoJson dependency.
+
+#### Text frame types
+
+| `type` | Purpose | Fields |
+|--------|---------|--------|
+| `audio_start` | Begins streaming PCM playback | `sample_rate` (int), `channels` (int), `bits` (int) — default 24000/1/16 |
+| `audio_end` | Signals end of audio stream | — |
+| `status` | Updates the receiving screen status line | `state`: `"transcribing"`, `"thinking"`, or `"speaking"` (mapped to localized labels) |
+| `token` | Streaming text token | `content`: appended to the accumulated agent text, displayed in real time |
+| `text` | Full text content | `content`: replaces or sets the agent text |
+| `done` | Final response frame | — triggers `EVT_RESPONSE_READY`, copies accumulated text to `g_agent_text` |
+| `error` | Server-side error | `message`: displayed for 2 s; triggers `EVT_WS_ERROR` |
+
+#### Binary frames
+
+Raw PCM audio chunks (~32 KB each), written directly into the 512 KB ring buffer. If the buffer is full, `ws_task` blocks (up to `STREAM_TIMEOUT_MS`) to apply TCP backpressure.
+
+### 11.3 Streaming Sequence (Typical Conversation)
+
 ```
-POST /api/chat/message
-Content-Type: application/json
-
-Body:
-{
-  "user_id": "<user_id configurado>",
-  "thread_id": "<uuid de conversacion>",
-  "message": "<texto transcrito (campo 'text' del paso 12.2)>",
-  "response_audio": true
-}
-
-Response 200:
-{
-  "thread_id": "...",
-  "user_message": "texto enviado",
-  "agent_text": "respuesta del agente en texto",
-  "tts_text": "texto preparado para TTS",
-  "audio_url": "/api/audio/files/<uuid>.mp3",
-  "audio_mime_type": "audio/mpeg",
-  "resolved_model": "..."
-}
-
-Error: Cualquier codigo != 200 → mostrar error y volver a Pantalla 2.
-```
-
-### 12.4 Descargar Audio TTS
-```
-GET {audio_url}
-Ejemplo: GET /api/audio/files/abc123.mp3
-
-Response 200:
-  Content-Type: audio/mpeg
-  Body: <datos binarios MP3>
-
-Error: Cualquier codigo != 200 → mostrar error y volver a Pantalla 2.
-```
-
-### 12.5 Variables de Configuracion de API (hardcoded en firmware)
-
-```cpp
-// Configuracion WiFi
-const char* WIFI_SSID = "TU_SSID";
-const char* WIFI_PASSWORD = "TU_PASSWORD";
-
-// Configuracion API
-const char* API_BASE_URL = "http://192.168.1.100:8000";  // Cambiar segun despliegue
-const char* USER_ID = "esp32-user-01";                     // ID de usuario fijo
+Client                              Server
+  │                                    │
+  ├── [BIN] WAV file ────────────────►│
+  ├── {"type":"audio_end"} ──────────►│
+  │                                    │
+  │◄── {"type":"status","state":"transcribing"}
+  │◄── {"type":"status","state":"thinking"}
+  │◄── {"type":"audio_start","sample_rate":24000,...}
+  │◄── [BIN] PCM chunk 1
+  │◄── [BIN] PCM chunk 2
+  │◄── {"type":"status","state":"speaking"}
+  │◄── {"type":"token","content":"Hello"}
+  │◄── [BIN] PCM chunk 3
+  │◄── {"type":"token","content":", how can"}
+  │◄── [BIN] PCM chunk 4
+  │◄── {"type":"audio_end"}
+  │◄── {"type":"token","content":" I help?"}
+  │◄── {"type":"done"}
+  │                                    │
+  ▼                           STATE_RESPONSE
 ```
 
-**NOTA:** En esta version, estos valores van hardcodeados como variables globales. En versiones futuras seran configurables dinamicamente.
+The server must pace binary chunks at approximately real-time rate (~48 KB/s for 24 kHz mono 16-bit). Bursting faster than the playback task consumes data causes the ring buffer to fill and `ws_task` to block.
+
+### 11.4 Fallback: Lone Binary WAV/PCM
+
+If the server sends a binary payload without a preceding `audio_start` message, the device treats it as a complete WAV or raw PCM buffer and plays it via `audio_play_wav_start()` / `audio_play_pcm_start()` after transitioning to STATE_RESPONSE. This path exists for backwards compatibility.
 
 ---
 
-## 13. Secuencia de Inicializacion del Dispositivo
+## 12. Audio Pipeline
 
-### Al encender / despertar de Deep Sleep:
+### 12.1 Recording
 
 ```
-1.  Leer causa de wakeup.
-2.  Inicializar Serial (115200 baud).
-3.  Inicializar GPIOs de potencia:
-    a. board_div.POWEER_EPD_ON()     // GPIO 6 = LOW
-    b. board_div.POWEER_Audio_ON()   // GPIO 42 = LOW
-4.  Inicializar I2C (SDA=47, SCL=48, 400 kHz).
-5.  Inicializar SPI2 para e-paper (40 MHz).
-6.  Detectar FT6336 en I2C 0x38:
-    a. Si responde → hasTouch = true. Inicializar driver FT6336.
-    b. Si no responde → hasTouch = false.
-7.  Inicializar e-paper:
-    a. Crear epaper_driver_display.
-    b. EPD_Init().
-    c. EPD_Clear().
-    d. EPD_DisplayPartBaseImage().
-    e. EPD_Init_Partial().
-8.  Inicializar LVGL:
-    a. Asignar buffers en SPIRAM (80000 bytes RGB565).
-    b. Configurar flush callback.
-    c. Inicializar tick timer (5ms).
-    d. Crear tarea LVGL (Core 1, prio 4, stack 8KB).
-9.  Inicializar codec de audio ES8311:
-    a. audio_bsp_init().
-    b. audio_play_init().
-10. Inicializar botones (multi_button, GPIO 0 y 18).
-11. Inicializar WiFi:
-    a. WiFi.mode(WIFI_STA).
-    b. WiFi.begin(SSID, PASSWORD).
-    c. Esperar conexion (timeout 15 segundos).
-12. Si es wakeup por usuario → Pantalla 1 (Activo).
-    Si es wakeup por timer → mostrar "Durmiendo... N", incrementar N, deep sleep.
-    Si es primer boot (power-on reset) y UUID es nulo → Pantalla 1 con solo "Nueva Conversacion".
+Microphone → ES8311 ADC → I2S DIN → rec_task (Core 1, prio 5, 8 KB stack)
+    → esp_codec_dev_read() in 1024-byte chunks
+    → PSRAM buffer (1.92 MB = 16000 Hz × 2 ch × 2 bytes × 30 s)
+    → On stop: build 44-byte WAV header in-place at buffer start
+    → ws_send_audio() pushes the full WAV to ws_cmd_queue
 ```
+
+- Format: 16 kHz, 16-bit, stereo PCM.
+- The codec is opened at 16 kHz stereo for recording. Recording and playback cannot share the codec simultaneously; the codec is re-opened for playback with the appropriate format.
+- Buffer is freed after sending (`audio_free_recording_buffer()` from `ws_send_audio`).
+
+### 12.2 Streaming Audio Playback
+
+```
+WebSocket binary frame → ws_task (onMessageCallback, Core 1)
+    → stream_buf_write() → 512 KB ring buffer (PSRAM)
+    → If full: binary semaphore blocks writer up to STREAM_TIMEOUT_MS (10 s)
+    → stream_task (Core 1, prio 5, 8 KB stack)
+        → Waits for STREAM_MIN_FILL_BYTES (24 KB, ~0.5 s at 24 kHz mono) or audio_end signal
+        → Opens ES8311 at negotiated sample rate/channels/bits
+        → Reads 1 KB (frame-aligned) chunks from ring buffer
+        → esp_codec_dev_write() — blocking I2S write, retries transient errors
+        → Loops until: end signal + buffer drained, stop flag, or STREAM_TIMEOUT_MS with no data
+```
+
+Key design decisions:
+- The blocking I2S write in the playback task is what yields CPU time to `ws_task`. No artificial delay is injected.
+- The ring buffer is a single-producer/single-consumer design with a binary semaphore for backpressure.
+- On `audio_end`, the server signals the stream end; the playback task drains remaining data, closes the codec, and frees the ring buffer.
+
+### 12.3 WAV / Raw PCM Fallback Playback
+
+Non-streamed playback (beeps and the lone-binary fallback) uses a `wav_playback_task`:
+- Parses the WAV header to extract sample rate, channels, and bit depth.
+- Opens the ES8311 codec at the parsed format.
+- Writes 1 KB chunks with a 5 ms inter-chunk delay, respecting `wav_stop_flag` and `wav_replay_flag`.
+- The replay flag is set by `audio_play_wav_replay()` but is not currently wired to any user action.
+- Raw PCM (without WAV header) is handled via `audio_play_pcm_start()` with explicit format parameters.
+
+### 12.4 Beeps
+
+Six beep types are defined as short WAV waveforms generated in heap/PSRAM at 24 kHz mono 16-bit:
+
+| Beep | Event | Waveform |
+|------|-------|----------|
+| START | Recording begins | 800 Hz, 130 ms |
+| STOP | Recording stopped | 500→800 Hz two-tone, 150 ms |
+| DISCARD | Recording discarded | 300 Hz, 330 ms |
+| RECONNECT | WebSocket reconnect requested | 1000 Hz, 330 ms |
+| SLEEP | Entering deep sleep | 900→600 Hz two-tone, 200 ms |
+| WAKE | User-initiated wake | 600→900 Hz two-tone, 200 ms |
+
+All waveforms begin with 50–70 ms of silence to prime the I2S TX DMA. Without this leading silence, short beeps are inaudible.
+
+**Always use `audio_beep_play_standalone()`**, not `audio_beep_play()`. The latter writes directly to an already-open codec and fails after a codec close/reopen cycle because the ES8311 DAC path is not re-enabled.
 
 ---
 
-## 14. Variables Persistentes (RTC_DATA_ATTR)
+## 13. WiFi
 
-```cpp
-// Todas estas sobreviven al deep sleep
-RTC_DATA_ATTR char conversation_uuid[37];  // UUID de la conversacion activa (36 chars + null)
-RTC_DATA_ATTR bool uuid_is_null;            // true si no hay UUID asignado
-RTC_DATA_ATTR int sleep_counter;            // Contador de ciclos de deep sleep sin intervencion
-RTC_DATA_ATTR int boot_count;               // Contador de boots totales (para debug)
-```
+### 13.1 Multi-Network Scanning
 
-**Inicializacion:**
-- En `setup()`, verificar si `boot_count == 0` (primer arranque absoluto) → inicializar `uuid_is_null = true`, `sleep_counter = 0`.
-- Si `boot_count > 0` → los valores ya vienen de RTC memory, no reinicializar.
-- Siempre incrementar `boot_count`.
-- **Al despertar por intervencion del usuario** (PWR o BOOT desde deep sleep), `sleep_counter` se asigna explicitamente a 0, independientemente de su valor anterior. Esto refleja que el usuario esta activo y reinicia el conteo de ciclos sin intervencion.
+Credentials are defined in `user_config_secrets.h` as `WIFI_NETWORKS` (an array of `{ssid, password}` pairs) and `WIFI_NETWORK_COUNT`.
 
----
+`wifi_connect_best()`:
+1. Early-returns if already `WL_CONNECTED` (prevents scan-induced WebSocket drops).
+2. Scans visible APs, filters to known SSIDs, and picks the strongest RSSI.
+3. Connects with a timeout of `WIFI_CONNECT_TIMEOUT_MS` (10 s).
+4. If no known network is found, returns; `wifi_task` rescans every 5 seconds.
 
-## 15. Manejo de Errores
+### 13.2 Reconnection Loop
 
-| Escenario | Accion |
-|-----------|--------|
-| WiFi no conecta (timeout 15s) | Mostrar "WIFI: --" en barra. Reintentar cada 10s. La app sigue funcionando sin WiFi (muestra mensaje de error si intenta usar API). |
-| Error HTTP (timeout, 4xx, 5xx) | Mostrar mensaje generico de error en pantalla por 2 segundos. Volver a Pantalla 2 (Grabar Mensaje). |
-| Transcripcion falla | Mostrar "Error al transcribir" por 2s. Volver a Pantalla 2. |
-| Chat falla | Mostrar "Error del servidor" por 2s. Volver a Pantalla 2. |
-| Descarga MP3 falla | Mostrar "Error al descargar audio" por 2s. Volver a Pantalla 2. |
-| PSRAM insuficiente | Mostrar "Error de memoria" y reiniciar dispositivo. |
-| Timeout de API (20s) | Tratar igual que error HTTP. |
+The `wifi_task` (Core 1, prio 2) polls every 5 seconds:
+- If connected and the event group does not yet reflect it, sets `WIFI_BIT_CONNECTED` and logs the IP.
+- If disconnected, clears the connected bit, sets `WIFI_BIT_DISCONNECTED`, and calls `wifi_connect_best()`.
+- Updates the status bar WiFi label under the LVGL mutex.
+
+`wifi_is_connected()` checks `WIFI_BIT_CONNECTED` in the event group, not `WiFi.status()` directly.
 
 ---
 
-## 16. Deteccion de Touch
+## 14. Battery Measurement
 
-### Algoritmo de Deteccion en setup():
-```cpp
-bool detectTouch() {
-    // Intentar leer registro 0x00 del FT6336 en I2C 0x38
-    uint8_t data;
-    if (i2c_read(0x38, 0x00, &data, 1) == ESP_OK) {
-        return true;  // FT6336 presente
-    }
-    return false;     // Sin touch
-}
-```
+- **ADC:** ADC1_CH3 (GPIO 4), 12-bit, 12 dB attenuation, curve-fitting calibration.
+- **Sampling:** 16 samples at 2 ms intervals; sorted, trimmed (2 extremes removed), averaged.
+- **Divider:** 1:2 resistor divider → measured voltage × 2.0.
+- **Percentage mapping:** non-linear LiPo curve (piecewise linear interpolation):
 
-Si `detectTouch() == false`:
-- Las pantallas con botones (Pantalla 1 y Pantalla 4) no muestran botones tactiles sino indicadores de cual opcion esta seleccionada, navegables solo con BOOT.
-- En Pantalla 2b, no hay interaccion tactil, solo botones fisicos.
+| Voltage | % |
+|---------|---|
+| 4.12 V | 100 |
+| 4.08 V | 95 |
+| 4.02 V | 90 |
+| 3.95 V | 80 |
+| 3.88 V | 70 |
+| 3.82 V | 60 |
+| 3.76 V | 50 |
+| 3.70 V | 40 |
+| 3.65 V | 30 |
+| 3.55 V | 15 |
+| 3.30 V | 0 |
 
----
-
-## 17. Decision de Libreria MP3: minimp3
-
-**Libreria seleccionada: minimp3**
-
-**Justificacion:**
-- Single-header C (~1500 lineas), sin dependencias.
-- Desarrollada especificamente para sistemas embebidos con recursos limitados.
-- Decodifica MP3 a PCM 16-bit en punto flotante o entero.
-- Probada extensivamente en ARM, ESP32 y otros microcontroladores.
-- Peso minimo en flash (~30KB).
-- No requiere sistema de archivos ni threading.
-- Compatible con C++ (envuelta en `extern "C"`).
-- La alternativa ESP8266Audio es mas pesada, orientada a streaming con buffer circular que no necesitamos (descargamos el archivo completo).
-
-**Fuente:** https://github.com/lieff/minimp3 (archivo `minimp3.h` — dominio publico / CC0).
+The `bat_task` measures every 30 seconds and updates the status bar widgets.
 
 ---
 
-## 18. Renderizado de Pantallas con LVGL
+## 15. Button Handling
 
-### Configuracion LVGL
+The vendored `multi_button` library detects single-click, double-click, long-press, and press-up events on BOOT (GPIO 0) and PWR (GPIO 18).
 
-```cpp
-// user_config.h
-#define EPD_WIDTH  200
-#define EPD_HEIGHT 200
-#define EXAMPLE_LVGL_TICK_PERIOD_MS    5
-#define EXAMPLE_LVGL_TASK_MAX_DELAY_MS 500
-#define EXAMPLE_LVGL_TASK_MIN_DELAY_MS 100
-#define LVGL_SPIRAM_BUFF_LEN (EPD_WIDTH * EPD_HEIGHT * 2)  // 80000 bytes
-```
+**Important bit-order difference:**
 
-### Flush Callback (LVGL → E-Paper)
+| Event | BOOT bit | PWR bit |
+|-------|----------|---------|
+| Single | 0 | 0 |
+| Long | 1 | 1 |
+| Up | 2 | 3 |
+| Double | 3 | 2 |
 
-```cpp
-void lvgl_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_map) {
-    // 1. Limpiar buffer local del driver e-paper
-    // 2. Para cada pixel en el area modificada:
-    //    - Convertir RGB565 a 1-bit: threshold en 0x7FFF
-    //    - Si < 0x7FFF → negro (0x00)
-    //    - Si >= 0x7FFF → blanco (0xFF)
-    //    - Llamar driver->EPD_DrawColorPixel(x, y, color)
-    // 3. driver->EPD_DisplayPart()
-    // 4. lv_disp_flush_ready(drv)
-}
-```
+Always use the named constants (`BOOT_BIT_SINGLE`, `PWR_BIT_DOUBLE`, etc.) with the `BTN_GET(ev, BIT)` macro.
 
-### Creacion de Pantallas
-
-Cada pantalla es una funcion que construye la UI con widgets LVGL:
-
-```cpp
-lv_obj_t* create_screen_1_active(bool hasTouch, bool uuidIsNull);
-lv_obj_t* create_screen_2_record();
-lv_obj_t* create_screen_2b_listening();
-lv_obj_t* create_screen_3_sending();
-lv_obj_t* create_screen_3b_discarded();
-lv_obj_t* create_screen_4_confirm(const char* transcribedText, bool hasTouch);
-lv_obj_t* create_screen_5_waiting();
-lv_obj_t* create_screen_6_response(const char* agentText);
-```
-
-Cada funcion:
-1. Crea un `lv_obj_t* screen = lv_obj_create(NULL)`.
-2. Si la pantalla lleva barra de estado, llama a `create_status_bar(screen)`.
-3. Agrega labels, botones, etc. segun corresponda.
-4. Retorna el objeto pantalla.
-
-La maquina de estados principal carga la pantalla activa con `lv_scr_load(screen)` y destruye la anterior con `lv_obj_del(old_screen)`.
-
-### Barra de Estado
-
-```cpp
-void create_status_bar(lv_obj_t* parent) {
-    // Label "WIFI: OK" arriba-izquierda
-    // Icono de bateria + label "XX%" arriba-derecha
-    // Linea separadora horizontal
-}
-```
-
-Se actualiza periodicamente actualizando el texto de los labels.
+The `btn_task` polls event groups every 200 ms, translates bits to `AppEvent` messages on `state_queue`, and handles PWR long-press (deep sleep) immediately before the per-state dispatch.
 
 ---
 
-## 19. Flujo de Datos Completo (End-to-End)
+## 16. Touch Detection and Handling
 
-```
-[Usuario habla] → MIC → ES8311 ADC → I2S → Buffer PSRAM (PCM raw)
-    → Codificar header WAV → Buffer WAV en PSRAM
-    → POST /api/audio/transcribe (WAV)
-    → Respuesta: {"text": "..."}
-    → Mostrar Pantalla 4 (confirmacion)
-    → [Usuario confirma] → POST /api/chat/message (JSON)
-    → Respuesta: {"agent_text": "...", "audio_url": "/api/audio/files/x.mp3"}
-    → Mostrar Pantalla 6 (texto respuesta)
-    → GET /api/audio/files/x.mp3 → Buffer MP3 en PSRAM
-    → minimp3: decodificar MP3 → PCM
-    → esp_codec_dev_write(pcm) → I2S → ES8311 DAC → PA → Parlante
-    → Fin reproduccion → Liberar buffer MP3 y textos de respuesta
-    → Pantalla 2 (listo para siguiente mensaje)
-```
+**Detection at boot:**
+1. Pulse the FT6336 RST pin (GPIO 7): HIGH → LOW → HIGH with 10 ms/50 ms delays.
+2. Probe I2C address 0x38.
+3. If found, create the `touch_task` and `touch_event_group`; if not, `hasTouch = false`.
+
+**Touch task:**
+- Waits on a queue fed by the GPIO ISR on the FT6336 INT pin (GPIO 21, falling edge).
+- Reads touch coordinates via FT6336 driver.
+- Pushes samples to a lock-free ring buffer (32 entries) consumed by LVGL's `lvgl_touch_read_cb`.
+- Fires `TOUCH_BIT_TAP` on the `touch_event_group` (used by screens for tap detection).
+- Includes a 3-read debounce on release to suppress spurious lift-off events.
+
+When touch is absent, the UI functions identically via physical buttons.
 
 ---
 
-## 20. Versionado del Firmware
+## 17. Inactivity Timer
 
-El firmware debe incluir una constante de version:
+A `sleep_timer` task waits on a task notification with a 60-second timeout (`INACTIVITY_TIMEOUT_MS`). Any user interaction (button press, touch, or `activity_feed()` call) resets the timer via `xTaskNotifyGive()`.
 
-```cpp
-#define FIRMWARE_VERSION "1.0.0"
-```
+The timer is **paused** (continues looping without sleeping) when:
+- `STATE_LISTENING`
+- `STATE_RECEIVING`
+- `STATE_RESPONSE` **and** audio is still playing (`audio_wav_is_playing()`)
 
-Se muestra en el monitor serial al iniciar.
+It is **not paused** in `STATE_SETTINGS` — the device will sleep after 60 s even while viewing settings.
+
+---
+
+## 18. Deep Sleep Implementation
+
+Two entry functions:
+
+**`enter_deep_sleep()`** — full path:
+1. Play sleep beep.
+2. Full EPD refresh (`EPD_Init()` + `EPD_Display()`) for a clean white screen.
+3. Configure EXT1 wake-up on GPIO 0 and GPIO 18 (ANY_LOW).
+4. Hold GPIO 17 via `rtc_gpio_hold_en()`.
+5. Set 3600 s timer wake-up.
+6. 500 ms delay, then `esp_deep_sleep_start()`.
+
+**`enter_deep_sleep_light()`** — timer auto-wake path:
+1. Skip the EPD refresh (display was already rendered with the sleep counter).
+2. Same EXT1 and timer configuration.
+3. `esp_deep_sleep_start()`.
 
 ---
 
-## 21. Notas de Implementacion
+## 19. Boot Sequence
 
-1. **Todas las operaciones de red deben ser asincronas** respecto a la UI. Mientras se espera respuesta HTTP, la UI debe seguir respondiendo (al menos para mostrar el estado actual).
+The `setup()` function in `ePaperConversational.ino` handles four wake scenarios:
 
-2. **El audio grabado se almacena en PSRAM**, no en flash ni SD. Esto implica un limite practico de ~30 segundos de grabacion. Si el buffer se llena antes, se trunca silenciosamente.
+### 19.1 First Boot (`boot_count == 0`)
 
-3. **El archivo WAV se construye en memoria** agregando un header de 44 bytes al inicio del buffer PCM. No se escribe en storage.
+1. Enable PSRAM allocation for blocks ≥256 bytes (`heap_caps_malloc_extmem_enable(256)`).
+2. Initialize language from `g_lang_index` (defaults to 0, Spanish).
+3. `sleep_counter = 0`.
+4. `user_app_init()` — initializes serial, power rails, display driver, LVGL port, button detection, touch detection (if present), WiFi (blocking `wifi_connect_best`), battery, inactivity timer, audio codec, and WebSocket.
+5. `lvgl_port_init()` + `user_ui_init()` inside `user_app_init()`: loads the "Connecting" screen before WiFi blocks.
+6. `status_bar_set_visible(true)`.
+7. If the application state has already advanced past `STATE_CONNECTING` (e.g., WiFi was fast), call `switch_state(g_app_state)` to correct the screen.
 
-4. **El archivo MP3 descargado se almacena integramente en PSRAM** antes de iniciar la decodificacion. Esto simplifica el manejo de streaming y la integracion con minimp3.
+### 19.2 EXT1 Wake (User Pressed BOOT or PWR)
 
-5. **La conexion WiFi se establece una vez al despertar** y se mantiene durante toda la sesion activa. Si se pierde, se reconecta automaticamente.
+1. `sleep_counter = 0`.
+2. `g_play_wake_beep = true` (consumed on `EVT_WS_CONNECTED`).
+3. Full `user_app_init()` as above.
 
-6. **Las pantallas de e-paper se renderizan en modo partial refresh** para minimizar el parpadeo durante la operacion normal. El **full refresh** (limpieza completa usando `EPD_Display()` con el LUT completo y pantalla en blanco) se ejecuta exclusivamente al entrar en deep sleep, para dejar el display limpio y prevenir ghosting acumulativo.
+### 19.3 Timer Wake
 
-7. **El LED (GPIO 3) parpadea durante operaciones de red** como indicador visual para debug (200ms on/off durante WiFi connecting, apagado cuando idle).
+1. `sleep_counter++`.
+2. Display-only init (`display_light_init()` + `lvgl_port_init()`).
+3. Render "Sleeping... N" screen.
+4. 800 ms delay, then `enter_deep_sleep_light()`.
 
-8. **Los widgets LVGL se destruyen al cambiar de pantalla** para liberar memoria. No se reciclan entre pantallas.
+### 19.4 Other Wake
 
-9. **No se usa SD card** en esta version del firmware. Todo el almacenamiento temporal es en PSRAM.
+Same path as EXT1 but without resetting `sleep_counter`.
 
-10. **Al abandonar la Pantalla 6** (por fin de reproduccion, PWR o cualquier otra transicion), se debe ejecutar una rutina de limpieza que libere: (a) el buffer del MP3 descargado en PSRAM, (b) el buffer que contiene la respuesta JSON del STT, y (c) el buffer que contiene la respuesta JSON del chat. Esto evita fugas de memoria entre ciclos de conversacion.
+### Idempotency
 
-11. **El boton BOOT en Pantalla 6** reinicia la reproduccion desde el inicio sin volver a descargar el archivo MP3. Para lograrlo, se reinicia el puntero de lectura al inicio del buffer MP3 ya descargado y se reinicializa el decodificador `mp3dec_init()`. Si el buffer MP3 ya fue liberado (porque la reproduccion anterior termino), este boton no tiene efecto.
+`lvgl_port_init()` and `user_ui_init()` use static guards to ensure they execute only once. This is critical because the timer wake path calls `lvgl_port_init()` standalone after `display_light_init()` has already initialized the display.
 
 ---
-Documento listo para implementacion. Version 1.0.
+
+## 20. Persistent State (RTC Slow Memory)
+
+| Variable | Type | Purpose |
+|----------|------|---------|
+| `boot_count` | `int` | Total number of boots (debug) |
+| `sleep_counter` | `int` | Consecutive timer auto-wakes without user interaction |
+| `g_lang_index` | `int` | Index into `lang_table[]` (0 = Spanish, 1 = English) |
+
+None of these are reset to defaults on wake; the boot-time logic in `setup()` explicitly sets `sleep_counter = 0` on user wake and `boot_count = 0` on the very first boot.
+
+---
+
+## 21. Screen Implementation Details
+
+Each `create_screen_*()` function:
+1. Creates a new `lv_obj_t *screen = lv_obj_create(NULL)` with white background and `LV_OPA_COVER`.
+2. Removes the `LV_OBJ_FLAG_SCROLLABLE` flag (the screen itself does not scroll; scrollable text areas use inner containers).
+3. Calls `create_status_bar(screen)` for all screens except deep sleep.
+4. Returns the screen object.
+
+The state machine in `switch_state()`:
+1. Takes the LVGL mutex.
+2. Records the current active screen.
+3. For STATE_RESPONSE, saves the receiving screen's scroll position to carry it forward.
+4. Calls the appropriate `create_screen_*()`.
+5. Loads the new screen, runs `lv_timer_handler()`, and deletes the old screen.
+6. Releases the mutex.
+7. For STATE_RESPONSE, if audio is not already playing, checks for a fallback WAV/PCM buffer and starts playback.
+
+### 21.1 Status Text Coalescing
+
+The receiving screen uses a coalescing mechanism to decouple WebSocket text updates from e-paper rendering:
+
+- `queue_screen_receiving_status()` (called from `ws_task`) acquires a mutex briefly, copies the new status text into `pending_receiving_status`, and sets a flag.
+- An LVGL timer at 50 ms checks the flag, applies the label update, and preserves the scroll position.
+- This prevents the WebSocket thread from ever blocking on an e-paper partial refresh (~300 ms).
+
+The response screen passes the scroll position from the receiving screen to maintain visual continuity.
+
+### 21.2 Status Bar Singleton
+
+`create_status_bar()` creates the bar on `lv_layer_top()` and returns the same object on subsequent calls. This prevents multiple bars from stacking when screens are replaced. `status_bar_set_visible()` toggles the `LV_OBJ_FLAG_HIDDEN` flag.
+
+---
+
+## 22. Error Handling
+
+| Scenario | Action |
+|----------|--------|
+| WiFi connection failure | `wifi_task` retries every 5 s. Status bar shows `WIFI: --`. |
+| WebSocket connection failure | `ws_task` retries every 3 s. Screen remains at Connecting. |
+| WebSocket disconnect during conversation | `EVT_WS_DISCONNECTED` → transition to Connecting. Playback and audio buffers are stopped/freed. |
+| Server `error` message | Localized error displayed for 2 s, audio playback stopped, return to Record. |
+| Request timeout (10 min) | `EVT_WS_ERROR` → stop playback, free buffers, return to Record. |
+| PSRAM allocation failure (recording) | Logged as fatal, device restarts via `ESP.restart()`. |
+| PSRAM allocation failure (streaming) | Write returns false, chunk lost. |
+| I2S write transient error | Playback task retries with 2 ms backoff for up to 1 s. |
+
+---
+
+## 23. Configuration Constants
+
+All non-secret constants in `user_config.h`. Secrets in `user_config_secrets.h` (gitignored; `user_config_secrets.example.h` provided as template).
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `EPD_WIDTH` / `EPD_HEIGHT` | 200 | Display dimensions |
+| `LVGL_SPIRAM_BUFF_LEN` | 80000 | 200×200×2 bytes per LVGL buffer |
+| `EXAMPLE_LVGL_TICK_PERIOD_MS` | 5 | LVGL tick interval |
+| `EXAMPLE_LVGL_TASK_MIN_DELAY_MS` | 20 | Min LVGL task loop delay |
+| `EXAMPLE_LVGL_TASK_MAX_DELAY_MS` | 500 | Max LVGL task loop delay |
+| `STREAM_BUF_SIZE` | 524288 | Ring buffer capacity (512 KB) |
+| `STREAM_MIN_FILL_BYTES` | 24000 | Pre-buffering threshold (~0.5 s at 24 kHz) |
+| `STREAM_TIMEOUT_MS` | 10000 | Max wait for buffer fill/data |
+| `WS_REQUEST_TIMEOUT_MS` | 600000 | Request timeout (10 min) |
+| `AGENT_TEXT_SIZE` | 4096 | Max agent response text |
+| `_WS_CONFIG_MAX_MESSAGE_SIZE` | 524288 | WebSocket max message (512 KB) |
+| `INACTIVITY_TIMEOUT_MS` | 60000 | Idle timeout before sleep (60 s) |
+| `SLEEP_DURATION_SEC` | 3600 | Deep sleep duration (1 hour) |
+| `WIFI_CONNECT_TIMEOUT_MS` | 10000 | WiFi connection timeout |
+| `BATTERY_FULL_VOLTAGE` | 4.12 | Full charge voltage |
+| `BATTERY_EMPTY_VOLTAGE` | 3.30 | Empty voltage |
+| `REC_BUFFER_SIZE` | 1920000 | Recording buffer (1.92 MB, 30 s) |
+
+---
+
+## 24. Non-Obvious Gotchas
+
+1. **`user_config.h` must be included before `<ArduinoWebsockets.h>`** — it defines `_WS_CONFIG_MAX_MESSAGE_SIZE` (512 KB). Reversing the order silently reverts to the library's small default and truncates PCM chunks.
+
+2. **LED is active LOW** — `LOW` = on, `HIGH` = off. `wifi_led_write(true)` internally inverts: `gpio_set_level(LED_PIN, on ? 0 : 1)`.
+
+3. **PWR button bit order differs from BOOT** — `PWR_BIT_DOUBLE = 2`, `PWR_BIT_UP = 3` vs `BOOT_BIT_UP = 2`, `BOOT_BIT_DOUBLE = 3`. Always use named constants.
+
+4. **Beeps need leading silence** — ~50–70 ms at the start of every beep waveform primes the I2S TX DMA. Without it, short beeps are inaudible.
+
+5. **Use `audio_beep_play_standalone()`** — the non-standalone variant writes to an already-open codec and fails after a close/reopen cycle.
+
+6. **LVGL themes disabled** — opacity must be set explicitly (e.g., `LV_OPA_COVER` for battery fill bars).
+
+7. **`API_BASE_URL` uses `http://`** even though transport is WebSocket. `ws_client.cpp` parses host and port from it and builds `ws://host:port/ws`.
+
+8. **`ws_task` stack is 20 KB** — needed for `String` URL parsing and large stack-local variables. Do not reduce it.
+
+9. **Arduino IDE compiles everything** — `api_client.cpp` and `minimp3.h` are compiled even though no live code includes them. Do not extend dead files.
+
+10. **Partial refresh everywhere** — full refresh (`EPD_Init()` + `EPD_Display()`) only in `enter_deep_sleep()`.
+
+---
+
+*Document version 2.0 — matches firmware v1.0.0, updated to reflect WebSocket streaming architecture.*
