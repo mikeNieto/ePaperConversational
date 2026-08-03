@@ -13,6 +13,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, min
 - Only verification: compile with Arduino IDE and flash to hardware
 - **LVGL setup**: use exactly one Arduino library named `lvgl`, version 9.x. Use the tracked `lv_conf.h` as the project configuration when installing it in the Arduino sketchbook.
 - **PSRAM must be enabled**: select `OPI PSRAM` in Arduino IDE for the ESP32-S3 board, and call `heap_caps_malloc_extmem_enable(256)` first in `setup()`
+- The firmware requires the Arduino build define `BOARD_HAS_PSRAM`; `ePaperConversational.ino` stops compilation if PSRAM is not enabled.
+- The board has 8MB flash. The current firmware fits the default 1.31MB application partition at about 1.25MB; use an 8MB or `Huge APP` partition if future features increase the image.
 - **Secrets setup**: `cp user_config_secrets.example.h user_config_secrets.h` then edit with real WiFi/api credentials
 
 ## Architecture
@@ -38,6 +40,9 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, min
   - 2 display buffers (80KB each) in SPIRAM, fallback to internal RAM if SPIRAM fails
   - Touch: `lv_indev_touch_read_cb` reads from global `last_touch_x/y/pressed` set by `touch_task`
   - `lv_tick_inc(5)` driven by `esp_timer` at 5ms period
+  - `lv_conf.h` disables unused widgets, themes, layouts, decoders, drivers, examples and demos to keep flash usage below the default partition limit.
+  - LVGL's 48KB allocator pool is created in SPIRAM with `LV_MEM_POOL_ALLOC`; the display buffers remain 80KB × 2 in SPIRAM.
+  - The built-in Montserrat 14 font is disabled. `font_montserrat_latin_14.c` is the project font, generated at 14px/4bpp with ASCII plus Latin-1 (`0xA1-0xFF`) for `ñ`, accented vowels, `¿` and `¡`.
 - **WebSocket communication** (not REST): all audio/data flows through a single WebSocket to `ws://<host>:<port>/ws`
   - Binary messages = PCM audio chunks from backend (streaming); text messages = JSON status/token/text/done/error and streaming control (`audio_start`/`audio_end`)
   - Client sends: binary WAV audio + `{"type":"audio_end"}` text message
@@ -70,7 +75,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, min
   - Wake causes: `EXT1` (GPIO0 or GPIO18, `ANY_LOW`) or `TIMER` (60 min)
   - Two entry paths: `enter_deep_sleep()` (full EPD refresh + `EPD_Display()`) and `enter_deep_sleep_light()` (no display refresh, used for timer auto-wake)
   - `rtc_gpio_hold_en(GPIO_NUM_17)` to keep VBAT powered
-- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL allocator pool and buffers (48KB + 80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB)
+- **PSRAM critical**: large allocations use `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)` — LVGL allocator pool and buffers (48KB + 80KB×2), recording buffer (1.92MB), streaming ring buffer (512KB). The LVGL pool additionally requires `MALLOC_CAP_8BIT`.
 
 ## Key conventions
 
@@ -86,6 +91,8 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, min
   - `STATE_CONNECTING` and `STATE_RECEIVING`: buttons have no effect
 - Touch behavior per state: `STATE_RECORD` → sends `EVT_START_RECORDING`; `STATE_LISTENING` → sends `EVT_STOP_RECORDING`
 - Audio recording: 16kHz 16-bit stereo, max 30 seconds (~1.92MB PSRAM buffer). Auto-discards on timeout (`EVT_RECORDING_DONE` with empty buffer → back to RECORD). Recording runs in a FreeRTOS task (`rec_task_handle`).
+- Battery measurement: ADC1_CH3/GPIO4 at 12dB with curve-fitting calibration and a 1:2 divider. `battery_get_status()` averages 16 samples spaced by 2ms, discards two samples at each extreme, and maps the result through a LiPo voltage curve (`4.12V=100%`, `3.30V=0%`).
+- Battery UI: the voltage and percentage label use the same averaged reading. Four fill bars use thresholds of 1-25%, 26-50%, 51-75% and 76-100%; every fill object explicitly uses `LV_OPA_COVER` because LVGL themes are disabled.
 - Partial refresh (`EPD_DisplayPart()`) for normal operation; full refresh (`EPD_Display()` after `EPD_Init()`) only in `enter_deep_sleep()` before deep sleep
 - Touch detection: runtime-probed via I2C at `0x38` (FT6336), flag `hasTouch` set; `touch_task` only created if `hasTouch == true`
 - Inactivity timer (60s): pauses if `STATE_LISTENING`, `STATE_RECEIVING`, or `STATE_RESPONSE` with audio playing (`audio_wav_is_playing()`). Runs normally in `STATE_SETTINGS` (will deep sleep after 60s idle).
@@ -118,7 +125,7 @@ Uses ArduinoWebsockets library (`#include <ArduinoWebsockets.h>`), LVGL 9.x, min
 
 Configuration is split into two files:
 
-- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings, `WIFI_CONNECT_TIMEOUT_MS`. **When adding new config constants, add them here.**
+- **`user_config.h`** — tracked in git. Contains all non-secret config: GPIO pins, timing constants, SPI/I2C settings, display params, deep sleep settings, WiFi timeout and battery sampling/curve constants. **When adding new config constants, add them here.**
 - **`user_config_secrets.h`** — gitignored (not tracked). Contains the secret defines: `WIFI_NETWORKS` (multi-WiFi list with SSID+password pairs), `WIFI_NETWORK_COUNT`, `API_BASE_URL`. `user_config.h` includes this file at the end.
 - **`user_config_secrets.example.h`** — tracked template with dummy values. New clones: `cp user_config_secrets.example.h user_config_secrets.h` and edit with real values.
 
@@ -138,6 +145,7 @@ Configuration is split into two files:
 | `src/esp_codec_dev/` | External codec library (v1.3.5, ESP-IDF component) |
 | `src/ui/screens.cpp` | 7 screen creation functions + receiving status updater + settings screen |
 | `src/ui/status_bar.cpp` | WiFi + battery status bar widget |
+| `font_montserrat_latin_14.c` | Project-generated 14px Montserrat font with Latin-1 glyphs |
 | `audio_stream.h` / `audio_stream.cpp` | Streaming ring buffer: 512KB PSRAM circular buffer with blocking writes + binary semaphore backpressure |
 | `ws_client.h` / `ws_client.cpp` | WebSocket client: connect, send/receive, JSON parsing, audio buffer mgmt, streaming protocol handling |
 | `audio_bsp.h` / `audio_bsp.cpp` | ES8311 codec control, recording task, WAV/PCM playback tasks, streaming playback init |
